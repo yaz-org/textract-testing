@@ -1,1 +1,0 @@
-function e(e){if(e<1024)return`${e} B`;let t=[`KB`,`MB`,`GB`],n=e/1024,r=0;for(;n>=1024&&r<t.length-1;)n/=1024,r+=1;return`${n.toFixed(n>=10?0:1)} ${t[r]}`}function t(e){return new Intl.DateTimeFormat(`en`,{dateStyle:`medium`,timeStyle:`short`}).format(new Date(e))}export{t as n,e as t};
