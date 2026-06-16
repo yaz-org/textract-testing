@@ -3,7 +3,7 @@
 export default $config({
   app(input) {
     return {
-      name: "monorepo-template",
+      name: "textract-testing",
       removal: input?.stage === "production" ? "retain" : "remove",
       protect: ["production"].includes(input?.stage),
       home: "aws",
@@ -11,10 +11,12 @@ export default $config({
   },
   async run() {
     const storage = await import("./infra/storage");
-    await import("./infra/api");
+    const web = await import("./infra/web");
 
     return {
-      MyBucket: storage.bucket.name,
+      BucketName: storage.documentsBucket.name,
+      DocumentsTableName: storage.documentsTable.name,
+      WebUrl: web.web.url,
     };
   },
 });

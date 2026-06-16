@@ -1,5 +1,5 @@
 {
-  "name": "monorepo-template",
+  "name": "textract-testing",
   "version": "0.0.0",
   "workspaces": [
     "packages/*"
@@ -10,6 +10,6 @@
     "typescript": "^5"
   },
   "dependencies": {
-    "sst": "^3"
+    "sst": "^4"
   }
 }
