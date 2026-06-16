@@ -1,0 +1,70 @@
+{
+	"$schema": "./node_modules/@biomejs/biome/configuration_schema.json",
+	"vcs": {
+		"enabled": false,
+		"clientKind": "git",
+		"useIgnoreFile": false
+	},
+	"files": {
+		"ignoreUnknown": false,
+		"includes": [
+			"**/src/**/*",
+			"**/.vscode/**/*",
+			"**/index.html",
+			"**/vite.config.ts",
+			"!**/src/routeTree.gen.ts",
+			"!**/src/styles.css"
+		]
+	},
+	"formatter": {
+		"enabled": true,
+		"indentStyle": "tab"
+	},
+	"assist": { "actions": { "source": { "organizeImports": "on" } } },
+	"linter": {
+		"enabled": true,
+		"rules": {
+			"recommended": true
+		}
+	},
+	"javascript": {
+		"formatter": {
+			"quoteStyle": "double"
+		}
+	},
+	"overrides": [
+		{
+			// shadcn/ui upstream components — suppress rules that conflict with
+			// the library's intentional patterns (role="group" on <div>,
+			// role="link" on disabled breadcrumb, dangerouslySetInnerHTML for
+			// CSS variable injection in ChartStyle, etc.). These files are
+			// generated/managed by the shadcn CLI; deviating from upstream
+			// structure makes future upgrades harder.
+			"includes": ["src/components/ui/**"],
+			"linter": {
+				"rules": {
+					"a11y": {
+						"useFocusableInteractive": "off",
+						"useSemanticElements": "off",
+						"useKeyWithClickEvents": "off",
+						"noLabelWithoutControl": "off",
+						"useAriaPropsForRole": "off",
+						"noRedundantRoles": "off"
+					},
+					"security": {
+						"noDangerouslySetInnerHtml": "off"
+					},
+					"suspicious": {
+						"noArrayIndexKey": "off",
+						"noDocumentCookie": "off",
+						"noDoubleEquals": "off"
+					},
+					"correctness": {
+						"noUnusedImports": "off",
+						"useExhaustiveDependencies": "off"
+					}
+				}
+			}
+		}
+	]
+}
