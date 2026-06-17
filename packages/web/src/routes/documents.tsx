@@ -27,7 +27,6 @@ import {
 	DialogTrigger,
 } from "#/components/ui/dialog.tsx";
 import {
-	Table,
 	TableBody,
 	TableCell,
 	TableHead,
@@ -239,59 +238,58 @@ function DocumentsPage() {
 	const selectedCount = Object.keys(rowSelection).length;
 
 	return (
-		<Card>
+		<Card className="h-full">
 			<CardHeader className="sm:flex-row sm:items-end sm:justify-between">
 				<div>
 					<p className="text-sm font-semibold uppercase tracking-[0.3em] text-amber-700">
 						Documents
 					</p>
 					<CardTitle className="mt-3 text-2xl">
-						Current document records
 					</CardTitle>
 					<CardDescription className="mt-3 text-base">
-						Browse DynamoDB metadata and remove documents from both storage
-						layers.
 					</CardDescription>
 				</div>
-				<div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-slate-700">
-					{selectedCount > 0
-						? `${selectedCount} of ${documents.length} selected`
-						: `${documents.length} ${documents.length === 1 ? "document" : "documents"}`}
-				</div>
+				<div className="flex gap-4 items-center">
+          <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-slate-700">
+            {selectedCount > 0
+                ? `${selectedCount} of ${documents.length} selected`
+                : `${documents.length} ${documents.length === 1 ? "document" : "documents"}`}
+          </div>
+
+          {selectedCount > 0 && (
+              <Button
+                  type="button"
+                  variant="destructive"
+                  size="sm"
+                  onClick={handleDeleteSelected}
+                  disabled={pendingIds.size > 0}
+              >
+                {pendingIds.size > 0 ? (
+                    <Loader2 className="mr-1 animate-spin" />
+                ) : (
+                    <Trash2 className="mr-1" />
+                )}
+                Delete {selectedCount} selected
+              </Button>
+          )}
+        </div>
 			</CardHeader>
 
-			<CardContent>
+			<CardContent className="flex flex-1 flex-col overflow-hidden">
 				{error ? (
 					<p className="mb-5 text-sm font-medium text-rose-700">{error}</p>
 				) : null}
 
-				{selectedCount > 0 && (
-					<div className="mb-4 flex items-center gap-3">
-						<Button
-							type="button"
-							variant="destructive"
-							size="sm"
-							onClick={handleDeleteSelected}
-							disabled={pendingIds.size > 0}
-						>
-							{pendingIds.size > 0 ? (
-								<Loader2 className="mr-1 animate-spin" />
-							) : (
-								<Trash2 className="mr-1" />
-							)}
-							Delete {selectedCount} selected
-						</Button>
-					</div>
-				)}
+
 
 				{documents.length === 0 ? (
-					<div className="rounded-[1.5rem] border border-dashed border-slate-300 bg-slate-50 p-10 text-center text-slate-600">
+					<div className="rounded-3xl border border-dashed border-slate-300 bg-slate-50 p-10 text-center text-slate-600">
 						No documents have been uploaded yet.
 					</div>
 				) : (
-					<div className="overflow-hidden rounded-[1.5rem] border border-slate-200">
-						<Table>
-							<TableHeader>
+					<div className="flex-1 overflow-y-auto rounded-3xl border border-slate-200">
+            <table className="min-w-full table-fixed text-sm">
+							<TableHeader className="sticky top-0 z-10 bg-card">
 								{table.getHeaderGroups().map((headerGroup) => (
 									<TableRow key={headerGroup.id}>
 										{headerGroup.headers.map((header) => (
@@ -324,7 +322,7 @@ function DocumentsPage() {
 									</TableRow>
 								))}
 							</TableBody>
-						</Table>
+						</table>
 					</div>
 				)}
 
