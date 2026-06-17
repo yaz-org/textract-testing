@@ -12,7 +12,7 @@ import {
 import { Input } from "#/components/ui/input.tsx";
 import { Label } from "#/components/ui/label.tsx";
 import { formatBytes } from "#/lib/format";
-import { createDocumentUpload, finalizeDocumentUpload } from "#/lib/server-fns";
+import { CONCURRENCY_MAX, createDocumentUpload, finalizeDocumentUpload } from "#/lib/server-fns";
 
 async function computeSHA256(file: File): Promise<string> {
 	const buffer = await file.arrayBuffer();
@@ -93,57 +93,105 @@ function UploadPage() {
 
 		setIsUploading(true);
 
-		let successCount = 0;
+		const hashes = await Promise.all(
+			pending.map((entry) => computeSHA256(entry.file)),
+		);
 
-		for (const entry of pending) {
-			updateEntry(entry.id, { status: "uploading", error: undefined });
+		const results = await createDocumentUpload({
+			data: pending.map((entry, i) => ({
+				fileName: entry.file.name,
+				contentType: entry.file.type || "application/octet-stream",
+				size: entry.file.size,
+				contentHash: hashes[i],
+			})),
+		});
 
-			try {
-				const contentHash = await computeSHA256(entry.file);
+		type ActiveItem = {
+			entry: FileEntry;
+			result: { tag: "success"; documentId: string; s3Key: string; uploadUrl: string };
+			contentHash: string;
+		};
 
-				const upload = await createDocumentUpload({
-					data: {
-						fileName: entry.file.name,
-						contentType: entry.file.type || "application/octet-stream",
-						size: entry.file.size,
-						contentHash,
-					},
-				});
+		const active: ActiveItem[] = [];
 
-				const response = await fetch(upload.uploadUrl, {
-					method: "PUT",
-					headers: {
-						"content-type": entry.file.type || "application/octet-stream",
-					},
-					body: entry.file,
-				});
+		for (let i = 0; i < pending.length; i++) {
+			const entry = pending[i];
+			const result = results[i];
 
-				if (!response.ok) {
-					throw new Error(`Upload failed with status ${response.status}.`);
-				}
-
-				await finalizeDocumentUpload({
-					data: {
-						documentId: upload.documentId,
-						fileName: entry.file.name,
-						s3Key: upload.s3Key,
-						contentType: entry.file.type || "application/octet-stream",
-						size: entry.file.size,
-						contentHash,
-					},
-				});
-
-				updateEntry(entry.id, { status: "success" });
-				successCount++;
-			} catch (caught) {
-				const message =
-					caught instanceof Error ? caught.message : "Upload failed.";
+			if (result.tag === "error") {
 				const status =
-					message.includes("already been uploaded") ||
-					message.includes("currently being uploaded")
+					result.error.includes("already been uploaded") ||
+					result.error.includes("currently being uploaded")
 						? "duplicate"
 						: "error";
-				updateEntry(entry.id, { status, error: message });
+				updateEntry(entry.id, { status, error: result.error });
+			} else {
+				active.push({ entry, result, contentHash: hashes[i] });
+			}
+		}
+
+		let successCount = 0;
+
+		for (let i = 0; i < active.length; i += CONCURRENCY_MAX) {
+			const batch = active.slice(i, i + CONCURRENCY_MAX);
+			const outcomes = await Promise.all(
+				batch.map(async ({ entry, result, contentHash }) => {
+					updateEntry(entry.id, {
+						status: "uploading",
+						error: undefined,
+					});
+
+					try {
+						const response = await fetch(result.uploadUrl, {
+							method: "PUT",
+							headers: {
+								"content-type":
+									entry.file.type || "application/octet-stream",
+							},
+							body: entry.file,
+						});
+
+						if (!response.ok) {
+							throw new Error(
+								`Upload failed with status ${response.status}.`,
+							);
+						}
+
+						await finalizeDocumentUpload({
+							data: {
+								documentId: result.documentId,
+								fileName: entry.file.name,
+								s3Key: result.s3Key,
+								contentType:
+									entry.file.type || "application/octet-stream",
+								size: entry.file.size,
+								contentHash,
+							},
+						});
+
+						return { id: entry.id, ok: true as const };
+					} catch (caught) {
+						const message =
+							caught instanceof Error
+								? caught.message
+								: "Upload failed.";
+						return { id: entry.id, ok: false as const, message };
+					}
+				}),
+			);
+
+			for (const outcome of outcomes) {
+				if (outcome.ok) {
+					updateEntry(outcome.id, { status: "success" });
+					successCount++;
+				} else {
+					const status =
+						outcome.message.includes("already been uploaded") ||
+						outcome.message.includes("currently being uploaded")
+							? "duplicate"
+							: "error";
+					updateEntry(outcome.id, { status, error: outcome.message });
+				}
 			}
 		}
 

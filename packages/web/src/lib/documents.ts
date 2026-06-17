@@ -126,6 +126,27 @@ export async function createUploadUrl(
 	};
 }
 
+export type UploadUrlResult =
+	| { tag: "success"; documentId: string; s3Key: string; uploadUrl: string }
+	| { tag: "error"; error: string };
+
+export async function createUploadUrls(
+	inputs: z.infer<typeof uploadRequestSchema>[],
+): Promise<UploadUrlResult[]> {
+	return Promise.all(
+		inputs.map(async (input) => {
+			try {
+				const result = await createUploadUrl(input);
+				return { tag: "success" as const, ...result };
+			} catch (caught) {
+				const message =
+					caught instanceof Error ? caught.message : "Upload failed.";
+				return { tag: "error" as const, error: message };
+			}
+		}),
+	);
+}
+
 export async function saveDocumentRecord(
 	input: z.infer<typeof finalizeUploadSchema>,
 ) {

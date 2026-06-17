@@ -1,6 +1,7 @@
 import { createServerFn } from "@tanstack/react-start";
+import { z } from "zod";
 import {
-	createUploadUrl,
+	createUploadUrls,
 	deleteDocument,
 	deleteDocumentSchema,
 	finalizeUploadSchema,
@@ -9,6 +10,9 @@ import {
 	saveDocumentRecord,
 	uploadRequestSchema,
 } from "./documents";
+import type { UploadUrlResult } from "./documents";
+
+export const CONCURRENCY_MAX = 10;
 
 export const getDocuments = createServerFn({ method: "GET" }).handler(
 	async () => {
@@ -23,9 +27,9 @@ export const getDocuments = createServerFn({ method: "GET" }).handler(
 );
 
 export const createDocumentUpload = createServerFn({ method: "POST" })
-	.validator(uploadRequestSchema)
-	.handler(async ({ data }) => {
-		return createUploadUrl(data);
+	.validator(z.array(uploadRequestSchema))
+	.handler(async ({ data }): Promise<UploadUrlResult[]> => {
+		return createUploadUrls(data);
 	});
 
 export const finalizeDocumentUpload = createServerFn({ method: "POST" })
