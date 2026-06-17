@@ -9,6 +9,7 @@ import {
 	getPresignedUrl,
 	listDocuments,
 	saveDocumentRecord,
+	saveTextractResult,
 	uploadRequestSchema,
 } from "./documents";
 import { analyzeDocument } from "./textract";
@@ -48,5 +49,7 @@ export const deleteStoredDocument = createServerFn({ method: "POST" })
 export const processDocument = createServerFn({ method: "POST" })
 	.validator(z.object({ documentId: z.string().uuid(), s3Key: z.string() }))
 	.handler(async ({ data }) => {
-		return analyzeDocument(data.s3Key);
+		const result = await analyzeDocument(data.s3Key);
+		await saveTextractResult(data.documentId, result);
+		return result;
 	});

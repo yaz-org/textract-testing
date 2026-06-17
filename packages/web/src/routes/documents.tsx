@@ -12,6 +12,7 @@ import {
 	ArrowDown,
 	ArrowUp,
 	ArrowUpDown,
+	Check,
 	ChevronLeft,
 	ChevronRight,
 	Loader2,
@@ -190,21 +191,25 @@ function DocumentsPage() {
 			header: "Action",
 			cell: ({ row }) => (
 				<div className="flex items-center gap-2">
-					<Button
-						type="button"
-						variant="outline"
-						size="sm"
-						onClick={() => handleTextract(row.original)}
-						disabled={textractProcessingId === row.original.documentId}
-						title="extract text from document"
-						aria-label="Extract text from document"
-					>
-						{textractProcessingId === row.original.documentId ? (
-							<Loader2 className="animate-spin" />
-						) : (
-							<TextInitial />
-						)}
-					</Button>
+					{row.original.textractExtractedAt ? (
+						<Check className="size-5 text-emerald-600" aria-label="Extracted" />
+					) : (
+						<Button
+							type="button"
+							variant="outline"
+							size="sm"
+							onClick={() => handleTextract(row.original)}
+							disabled={textractProcessingId === row.original.documentId}
+							title="extract text from document"
+							aria-label="Extract text from document"
+						>
+							{textractProcessingId === row.original.documentId ? (
+								<Loader2 className="animate-spin" />
+							) : (
+								<TextInitial />
+							)}
+						</Button>
+					)}
 					<Button
 						type="button"
 						variant="destructive"
@@ -285,6 +290,7 @@ function DocumentsPage() {
 			});
 			setTextractResult(result);
 			setTextractDialogOpen(true);
+			await router.invalidate();
 		} catch (caught) {
 			setError(
 				caught instanceof Error

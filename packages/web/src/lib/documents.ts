@@ -17,10 +17,12 @@ import {
 	PutCommand,
 	QueryCommand,
 	ScanCommand,
+	UpdateCommand,
 } from "@aws-sdk/lib-dynamodb";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { Resource } from "sst";
 import { z } from "zod";
+import type { TextractResult } from "./textract";
 
 const s3 = new S3Client({});
 const dynamo = DynamoDBDocumentClient.from(new DynamoDBClient({}));
@@ -69,6 +71,8 @@ export type DocumentRecord = {
 	size: number;
 	contentHash: string;
 	createdAt: string;
+	textractResult?: TextractResult;
+	textractExtractedAt?: string;
 };
 
 export async function createUploadUrl(
@@ -172,6 +176,24 @@ export async function saveDocumentRecord(
 	);
 
 	return item;
+}
+
+export async function saveTextractResult(
+	documentId: string,
+	result: TextractResult,
+) {
+	await dynamo.send(
+		new UpdateCommand({
+			TableName: Resource.DocumentsTable.name,
+			Key: { documentId },
+			UpdateExpression:
+				"SET textractResult = :result, textractExtractedAt = :ts",
+			ExpressionAttributeValues: {
+				":result": result,
+				":ts": new Date().toISOString(),
+			},
+		}),
+	);
 }
 
 export async function getPresignedUrl(s3Key: string) {
