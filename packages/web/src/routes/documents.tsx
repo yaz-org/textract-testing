@@ -82,6 +82,7 @@ function DocumentsPage() {
 	const [previewDocument, setPreviewDocument] = useState<DocumentRow | null>(
 		null,
 	);
+	const [dialogOpen, setDialogOpen] = useState(false);
 
 	async function handleDelete(documentId: string, s3Key: string) {
 		setPendingIds((prev) => new Set(prev).add(documentId));
@@ -148,7 +149,10 @@ function DocumentsPage() {
 			cell: ({ row }) => (
 				<button
 					type="button"
-					onClick={() => setPreviewDocument(row.original)}
+					onClick={() => {
+					setPreviewDocument(row.original);
+					setDialogOpen(true);
+				}}
 					className="block size-12 overflow-hidden rounded-md border border-slate-200 transition-shadow hover:ring-2 hover:ring-amber-500 focus:ring-2 focus:ring-amber-500 focus:outline-none"
 				>
 					<img
@@ -325,13 +329,14 @@ function DocumentsPage() {
 				)}
 
 				<Dialog
-					open={!!previewDocument}
-					onOpenChange={(open) => {
-						if (!open) setPreviewDocument(null);
-					}}
+					open={dialogOpen}
+					onOpenChange={setDialogOpen}
 				>
 					<DialogTrigger />
-					<DialogContent className="max-w-[90vw] sm:max-w-6xl">
+					<DialogContent
+						className="max-w-[90vw] sm:max-w-6xl"
+						onCloseAutoFocus={() => setPreviewDocument(null)}
+					>
 						<DialogTitle className="sr-only">Document preview</DialogTitle>
 						<DialogDescription></DialogDescription>
 						{previewDocument && (
