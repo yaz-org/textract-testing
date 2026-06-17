@@ -18,7 +18,7 @@ import {
 	TextInitial,
 	Trash2,
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Button } from "#/components/ui/button.tsx";
 import {
 	Card,
@@ -103,6 +103,7 @@ function DocumentsPage() {
 		null,
 	);
 	const [textractDialogOpen, setTextractDialogOpen] = useState(false);
+	const lastScrollTime = useRef(0);
 
 	async function handleDelete(documentId: string, s3Key: string) {
 		setPendingIds((prev) => new Set(prev).add(documentId));
@@ -317,8 +318,21 @@ function DocumentsPage() {
 			if (e.key === "ArrowLeft") goToPrev();
 			else if (e.key === "ArrowRight") goToNext();
 		}
+		function handleWheel(e: WheelEvent) {
+			if (!e.shiftKey) return;
+			e.preventDefault();
+			const now = Date.now();
+			if (now - lastScrollTime.current < 400) return;
+			lastScrollTime.current = now;
+			if (e.deltaY > 0) goToNext();
+			else if (e.deltaY < 0) goToPrev();
+		}
 		window.addEventListener("keydown", handleKeyDown);
-		return () => window.removeEventListener("keydown", handleKeyDown);
+		window.addEventListener("wheel", handleWheel, { passive: false });
+		return () => {
+			window.removeEventListener("keydown", handleKeyDown);
+			window.removeEventListener("wheel", handleWheel);
+		};
 	});
 
 	return (

@@ -11,8 +11,8 @@ const config = defineConfig({
 	plugins: [
 		devtools(),
 		nitro({
-      preset: "aws-lambda",
-    }),
+			preset: "aws-lambda",
+		}),
 		// nitro({ rollupConfig: { external: [/^@sentry\//] } }),
 		tailwindcss(),
 		tanstackStart(),
