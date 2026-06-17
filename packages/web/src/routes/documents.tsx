@@ -79,7 +79,9 @@ function DocumentsPage() {
 	const [rowSelection, setRowSelection] = useState({});
 	const [pendingIds, setPendingIds] = useState<Set<string>>(new Set());
 	const [error, setError] = useState<string | null>(null);
-	const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+	const [previewDocument, setPreviewDocument] = useState<DocumentRow | null>(
+		null,
+	);
 
 	async function handleDelete(documentId: string, s3Key: string) {
 		setPendingIds((prev) => new Set(prev).add(documentId));
@@ -146,7 +148,7 @@ function DocumentsPage() {
 			cell: ({ row }) => (
 				<button
 					type="button"
-					onClick={() => setPreviewUrl(row.original.presignedUrl)}
+					onClick={() => setPreviewDocument(row.original)}
 					className="block size-12 overflow-hidden rounded-md border border-slate-200 transition-shadow hover:ring-2 hover:ring-amber-500 focus:ring-2 focus:ring-amber-500 focus:outline-none"
 				>
 					<img
@@ -323,21 +325,44 @@ function DocumentsPage() {
 				)}
 
 				<Dialog
-					open={!!previewUrl}
+					open={!!previewDocument}
 					onOpenChange={(open) => {
-						if (!open) setPreviewUrl(null);
+						if (!open) setPreviewDocument(null);
 					}}
 				>
 					<DialogTrigger />
-					<DialogContent className="max-w-[90vw] w-auto sm:max-w-[90vw]">
-						<DialogTitle className="sr-only">Image preview</DialogTitle>
+					<DialogContent className="max-w-[90vw] sm:max-w-6xl">
+						<DialogTitle className="sr-only">Document preview</DialogTitle>
 						<DialogDescription></DialogDescription>
-						{previewUrl && (
-							<img
-								src={previewUrl}
-								alt="Preview"
-								className="mx-auto max-h-[80vh] w-auto rounded-md object-contain"
-							/>
+						{previewDocument && (
+							<div className="flex flex-col gap-6 sm:flex-row">
+								<div className="flex min-w-0 flex-1 items-start justify-center">
+									<img
+										src={previewDocument.presignedUrl}
+										alt={previewDocument.fileName}
+										className="h-auto max-h-[80vh] w-full rounded-md object-contain"
+									/>
+								</div>
+								<div className="w-72 shrink-0 space-y-4">
+									<div>
+										<h2 className="break-words text-lg font-semibold">
+											{previewDocument.fileName}
+										</h2>
+									</div>
+									<div className="space-y-1 text-sm">
+										<p className="text-muted-foreground">Type</p>
+										<p>{previewDocument.contentType}</p>
+									</div>
+									<div className="space-y-1 text-sm">
+										<p className="text-muted-foreground">Size</p>
+										<p>{formatBytes(previewDocument.size)}</p>
+									</div>
+									<div className="space-y-1 text-sm">
+										<p className="text-muted-foreground">Created</p>
+										<p>{formatDate(previewDocument.createdAt)}</p>
+									</div>
+								</div>
+							</div>
 						)}
 					</DialogContent>
 				</Dialog>

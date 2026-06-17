@@ -326,13 +326,3 @@ function UploadPage() {
 		</div>
 	);
 }
-
-export function InputFile() {
-	return (
-		<Field>
-			<FieldLabel htmlFor="picture">Picture</FieldLabel>
-			<Input id="picture" type="file" aria-label="picture-uploader" />
-			<FieldDescription>Select a picture to upload.</FieldDescription>
-		</Field>
-	);
-}
