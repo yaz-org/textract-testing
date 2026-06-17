@@ -9,15 +9,14 @@ import {
 	CardHeader,
 	CardTitle,
 } from "#/components/ui/card";
-import {
-  Field,
-  FieldDescription,
-  FieldLabel,
-} from "@/components/ui/field"
-import { Input } from "@/components/ui/input"
-import { Label } from "#/components/ui/label";
 import { formatBytes } from "#/lib/format";
-import { CONCURRENCY_MAX, createDocumentUpload, finalizeDocumentUpload } from "#/lib/server-fns";
+import {
+	CONCURRENCY_MAX,
+	createDocumentUpload,
+	finalizeDocumentUpload,
+} from "#/lib/server-fns";
+import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
 
 async function computeSHA256(file: File): Promise<string> {
 	const buffer = await file.arrayBuffer();
@@ -113,7 +112,12 @@ function UploadPage() {
 
 		type ActiveItem = {
 			entry: FileEntry;
-			result: { tag: "success"; documentId: string; s3Key: string; uploadUrl: string };
+			result: {
+				tag: "success";
+				documentId: string;
+				s3Key: string;
+				uploadUrl: string;
+			};
 			contentHash: string;
 		};
 
@@ -150,16 +154,13 @@ function UploadPage() {
 						const response = await fetch(result.uploadUrl, {
 							method: "PUT",
 							headers: {
-								"content-type":
-									entry.file.type || "application/octet-stream",
+								"content-type": entry.file.type || "application/octet-stream",
 							},
 							body: entry.file,
 						});
 
 						if (!response.ok) {
-							throw new Error(
-								`Upload failed with status ${response.status}.`,
-							);
+							throw new Error(`Upload failed with status ${response.status}.`);
 						}
 
 						await finalizeDocumentUpload({
@@ -167,8 +168,7 @@ function UploadPage() {
 								documentId: result.documentId,
 								fileName: entry.file.name,
 								s3Key: result.s3Key,
-								contentType:
-									entry.file.type || "application/octet-stream",
+								contentType: entry.file.type || "application/octet-stream",
 								size: entry.file.size,
 								contentHash,
 							},
@@ -177,9 +177,7 @@ function UploadPage() {
 						return { id: entry.id, ok: true as const };
 					} catch (caught) {
 						const message =
-							caught instanceof Error
-								? caught.message
-								: "Upload failed.";
+							caught instanceof Error ? caught.message : "Upload failed.";
 						return { id: entry.id, ok: false as const, message };
 					}
 				}),
@@ -217,49 +215,48 @@ function UploadPage() {
 						Upload
 					</p>
 					<CardTitle className="mt-3 text-2xl"></CardTitle>
-					<CardDescription className="text-base">
-					</CardDescription>
+					<CardDescription className="text-base"></CardDescription>
 				</CardHeader>
 
 				<CardContent>
 					<form className="space-y-5" onSubmit={handleSubmit}>
+						<Field>
+							<FieldLabel htmlFor="document">Picture</FieldLabel>
+							<Input
+								multiple
+								accept="image/*"
+								name="document"
+								id="document"
+								type="file"
+								aria-label="picture-uploader"
+								onChange={handleFileSelect}
+							/>
+							<FieldDescription>Select a picture to upload.</FieldDescription>
+						</Field>
 
-            <Field>
-              <FieldLabel htmlFor="document">Picture</FieldLabel>
-              <Input
-                  multiple
-                  accept="image/*"
-                  name="document"
-                  id="document"
-                     type="file"
-                     aria-label="picture-uploader"
-                  onChange={handleFileSelect}/>
-              <FieldDescription>Select a picture to upload.</FieldDescription>
-            </Field>
-
-            <div className="flex gap-3">
-              <Button
-                  type="submit"
-                  disabled={isUploading || pendingCount === 0}
-              >
-                {isUploading
-                    ? "Uploading..."
-                    : pendingCount > 0
-                        ? `Upload ${pendingCount} file${pendingCount === 1 ? "" : "s"}`
-                        : "Upload files"}
-              </Button>
-              {entries.length > 0 && (
-                  <Button
-                      type="button"
-                      variant="outline"
-                      onClick={handleClearAll}
-                      disabled={isUploading}
-                  >
-                    <Trash2 className="mr-1.5 size-4" />
-                    Clear all
-                  </Button>
-              )}
-            </div>
+						<div className="flex gap-3">
+							<Button
+								type="submit"
+								disabled={isUploading || pendingCount === 0}
+							>
+								{isUploading
+									? "Uploading..."
+									: pendingCount > 0
+										? `Upload ${pendingCount} file${pendingCount === 1 ? "" : "s"}`
+										: "Upload files"}
+							</Button>
+							{entries.length > 0 && (
+								<Button
+									type="button"
+									variant="outline"
+									onClick={handleClearAll}
+									disabled={isUploading}
+								>
+									<Trash2 className="mr-1.5 size-4" />
+									Clear all
+								</Button>
+							)}
+						</div>
 
 						{entries.length > 0 && (
 							<div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
@@ -309,8 +306,8 @@ function UploadPage() {
 											</div>
 										)}
 
-										{(entry.status === "pending" || entry.status === "duplicate")
-                        && (
+										{(entry.status === "pending" ||
+											entry.status === "duplicate") && (
 											<button
 												type="button"
 												onClick={() => handleRemove(entry.id)}
@@ -330,14 +327,12 @@ function UploadPage() {
 	);
 }
 
-
 export function InputFile() {
-  return (
-      <Field>
-        <FieldLabel htmlFor="picture">Picture</FieldLabel>
-        <Input id="picture" type="file"  aria-label="picture-uploader"/>
-        <FieldDescription>Select a picture to upload.</FieldDescription>
-      </Field>
-  )
+	return (
+		<Field>
+			<FieldLabel htmlFor="picture">Picture</FieldLabel>
+			<Input id="picture" type="file" aria-label="picture-uploader" />
+			<FieldDescription>Select a picture to upload.</FieldDescription>
+		</Field>
+	);
 }
-

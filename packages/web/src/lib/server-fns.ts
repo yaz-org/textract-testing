@@ -1,5 +1,6 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
+import type { UploadUrlResult } from "./documents";
 import {
 	createUploadUrls,
 	deleteDocument,
@@ -10,7 +11,6 @@ import {
 	saveDocumentRecord,
 	uploadRequestSchema,
 } from "./documents";
-import type { UploadUrlResult } from "./documents";
 
 export const CONCURRENCY_MAX = 10;
 

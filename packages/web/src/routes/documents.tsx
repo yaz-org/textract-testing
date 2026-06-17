@@ -1,15 +1,15 @@
 import { createFileRoute, useRouter } from "@tanstack/react-router";
-import { useState } from "react";
 import {
+	type Column,
+	type ColumnDef,
 	flexRender,
 	getCoreRowModel,
 	getSortedRowModel,
-	useReactTable,
-	type Column,
-	type ColumnDef,
 	type SortingState,
+	useReactTable,
 } from "@tanstack/react-table";
-import { ArrowUpDown, ArrowUp, ArrowDown, Trash2, Loader2 } from "lucide-react";
+import { ArrowDown, ArrowUp, ArrowUpDown, Loader2, Trash2 } from "lucide-react";
+import { useState } from "react";
 import { Button } from "#/components/ui/button.tsx";
 import {
 	Card,
@@ -22,7 +22,9 @@ import { Checkbox } from "#/components/ui/checkbox.tsx";
 import {
 	Dialog,
 	DialogContent,
+	DialogDescription,
 	DialogTitle,
+	DialogTrigger,
 } from "#/components/ui/dialog.tsx";
 import {
 	Table,
@@ -32,9 +34,9 @@ import {
 	TableHeader,
 	TableRow,
 } from "#/components/ui/table.tsx";
+import type { DocumentRecord } from "#/lib/documents";
 import { formatBytes, formatDate } from "#/lib/format";
 import { deleteStoredDocument, getDocuments } from "#/lib/server-fns";
-import type { DocumentRecord } from "#/lib/documents";
 
 type DocumentRow = DocumentRecord & { presignedUrl: string };
 
@@ -103,9 +105,7 @@ function DocumentsPage() {
 			header: ({ table }) => (
 				<Checkbox
 					checked={table.getIsAllPageRowsSelected()}
-					onCheckedChange={(value) =>
-						table.toggleAllPageRowsSelected(!!value)
-					}
+					onCheckedChange={(value) => table.toggleAllPageRowsSelected(!!value)}
 					aria-label="Select all"
 				/>
 			),
@@ -328,8 +328,10 @@ function DocumentsPage() {
 						if (!open) setPreviewUrl(null);
 					}}
 				>
+					<DialogTrigger />
 					<DialogContent className="max-w-[90vw] w-auto sm:max-w-[90vw]">
 						<DialogTitle className="sr-only">Image preview</DialogTitle>
+						<DialogDescription></DialogDescription>
 						{previewUrl && (
 							<img
 								src={previewUrl}
