@@ -68,7 +68,7 @@ function RootDocument({ children }: { children: React.ReactNode }) {
 function RootLayout() {
 	return (
 		<div className="min-h-screen">
-			<div className="mx-auto flex min-h-screen max-w-6xl flex-col px-4 py-6 sm:px-6 lg:px-8">
+			<div className="mx-auto flex min-h-screen w-full flex-col px-4 py-6 sm:px-6 lg:px-8">
 				<header className="rounded-[2rem] border border-white/80 bg-white/70 px-6 py-6 shadow-[0_20px_60px_rgba(15,23,42,0.08)] backdrop-blur">
 					<div className="flex flex-col gap-5 md:flex-row md:items-end md:justify-between">
 						<div className="max-w-2xl">
@@ -76,11 +76,8 @@ function RootLayout() {
 								Internal Document Console
 							</p>
 							<h1 className="mt-3 text-3xl font-semibold tracking-tight text-slate-900 sm:text-4xl">
-								Upload documents to S3 and manage their metadata in DynamoDB.
+								Upload
 							</h1>
-							<p className="mt-3 text-base text-slate-600">
-								Built as a small TanStack Start app on SST for internal use.
-							</p>
 						</div>
 
 						<nav className="flex flex-wrap gap-3">

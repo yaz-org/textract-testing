@@ -1,16 +1,21 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { Check, FileWarning, Loader2, Trash2, XIcon } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { Button } from "#/components/ui/button.tsx";
+import { Button } from "#/components/ui/button";
 import {
 	Card,
 	CardContent,
 	CardDescription,
 	CardHeader,
 	CardTitle,
-} from "#/components/ui/card.tsx";
-import { Input } from "#/components/ui/input.tsx";
-import { Label } from "#/components/ui/label.tsx";
+} from "#/components/ui/card";
+import {
+  Field,
+  FieldDescription,
+  FieldLabel,
+} from "@/components/ui/field"
+import { Input } from "@/components/ui/input"
+import { Label } from "#/components/ui/label";
 import { formatBytes } from "#/lib/format";
 import { CONCURRENCY_MAX, createDocumentUpload, finalizeDocumentUpload } from "#/lib/server-fns";
 
@@ -211,28 +216,26 @@ function UploadPage() {
 					<p className="text-sm font-semibold uppercase tracking-[0.3em] text-amber-700">
 						Upload
 					</p>
-					<CardTitle className="mt-3 text-2xl">Send documents to S3</CardTitle>
+					<CardTitle className="mt-3 text-2xl"></CardTitle>
 					<CardDescription className="text-base">
-						This uses a presigned URL, so the browser uploads the file directly
-						to the bucket and then saves the metadata record in DynamoDB.
 					</CardDescription>
 				</CardHeader>
 
 				<CardContent>
 					<form className="space-y-5" onSubmit={handleSubmit}>
-						<div>
-							<Label htmlFor="document" className="mb-2 block">
-								Documents
-							</Label>
-							<Input
-								multiple
-								accept="image/*"
-								name="document"
-								type="file"
-								id="document"
-								onChange={handleFileSelect}
-							/>
-						</div>
+
+            <Field>
+              <FieldLabel htmlFor="document">Picture</FieldLabel>
+              <Input
+                  multiple
+                  accept="image/*"
+                  name="document"
+                  id="document"
+                     type="file"
+                     aria-label="picture-uploader"
+                  onChange={handleFileSelect}/>
+              <FieldDescription>Select a picture to upload.</FieldDescription>
+            </Field>
 
             <div className="flex gap-3">
               <Button
@@ -326,3 +329,15 @@ function UploadPage() {
 		</div>
 	);
 }
+
+
+export function InputFile() {
+  return (
+      <Field>
+        <FieldLabel htmlFor="picture">Picture</FieldLabel>
+        <Input id="picture" type="file"  aria-label="picture-uploader"/>
+        <FieldDescription>Select a picture to upload.</FieldDescription>
+      </Field>
+  )
+}
+
