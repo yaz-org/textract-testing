@@ -289,6 +289,12 @@
       "skillPath": "skills/specialized-skills/ec2-skills/setting-up-ec2-instance-profiles/SKILL.md",
       "computedHash": "b5b96b5aa92931a110f636aa884e4b8f522e37be15c83da5c9174a4fd38ab962"
     },
+    "shadcn": {
+      "source": "shadcn/ui",
+      "sourceType": "github",
+      "skillPath": "skills/shadcn/SKILL.md",
+      "computedHash": "ac9d0d69caac7de1d1e5647f3db3bcd2f13af355d6b3a78780fbf7fc80e8dca0"
+    },
     "signing-in-to-aws": {
       "source": "aws/agent-toolkit-for-aws",
       "sourceType": "github",
