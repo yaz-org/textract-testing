@@ -208,123 +208,122 @@ function UploadPage() {
 	const pendingCount = entries.filter((e) => e.status === "pending").length;
 
 	return (
-     <div className="h-full overflow-auto">
-       <Card>
-         <CardHeader>
-           <p className="text-sm font-semibold uppercase tracking-[0.3em] text-amber-700">
-             Upload
-           </p>
-           <CardTitle className="mt-3 text-2xl"></CardTitle>
-           <CardDescription className="text-base"></CardDescription>
-         </CardHeader>
+		<div className="h-full overflow-auto">
+			<Card>
+				<CardHeader>
+					<p className="text-sm font-semibold uppercase tracking-[0.3em] text-amber-700">
+						Upload
+					</p>
+					<CardTitle className="mt-3 text-2xl"></CardTitle>
+					<CardDescription className="text-base"></CardDescription>
+				</CardHeader>
 
-         <CardContent className="flex flex-1 flex-col overflow-hidden">
-           <form className="space-y-5" onSubmit={handleSubmit}>
-             <Field>
-               <FieldLabel htmlFor="document">Picture</FieldLabel>
-               <Input
-                   multiple
-                   accept="image/*"
-                   name="document"
-                   id="document"
-                   type="file"
-                   aria-label="picture-uploader"
-                   onChange={handleFileSelect}
-               />
-               <FieldDescription>Select a picture to upload.</FieldDescription>
-             </Field>
+				<CardContent className="flex flex-1 flex-col overflow-hidden">
+					<form className="space-y-5" onSubmit={handleSubmit}>
+						<Field>
+							<FieldLabel htmlFor="document">Picture</FieldLabel>
+							<Input
+								multiple
+								accept="image/*"
+								name="document"
+								id="document"
+								type="file"
+								aria-label="picture-uploader"
+								onChange={handleFileSelect}
+							/>
+							<FieldDescription>Select a picture to upload.</FieldDescription>
+						</Field>
 
-             <div className="flex gap-3">
-               <Button
-                   type="submit"
-                   disabled={isUploading || pendingCount === 0}
-               >
-                 {isUploading
-                     ? "Uploading..."
-                     : pendingCount > 0
-                         ? `Upload ${pendingCount} file${pendingCount === 1 ? "" : "s"}`
-                         : "Upload files"}
-               </Button>
-               {entries.length > 0 && (
-                   <Button
-                       type="button"
-                       variant="outline"
-                       onClick={handleClearAll}
-                       disabled={isUploading}
-                   >
-                     <Trash2 className="mr-1.5 size-4" />
-                     Clear all
-                   </Button>
-               )}
-               <div className="mb-4 flex items-center justify-center gap-3">
-               </div>
-             </div>
+						<div className="flex gap-3">
+							<Button
+								type="submit"
+								disabled={isUploading || pendingCount === 0}
+							>
+								{isUploading
+									? "Uploading..."
+									: pendingCount > 0
+										? `Upload ${pendingCount} file${pendingCount === 1 ? "" : "s"}`
+										: "Upload files"}
+							</Button>
+							{entries.length > 0 && (
+								<Button
+									type="button"
+									variant="outline"
+									onClick={handleClearAll}
+									disabled={isUploading}
+								>
+									<Trash2 className="mr-1.5 size-4" />
+									Clear all
+								</Button>
+							)}
+							<div className="mb-4 flex items-center justify-center gap-3"></div>
+						</div>
 
-             {entries.length > 0 && (
-                 <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
-                   {entries.map((entry) => (
-                       <div
-                           key={entry.id}
-                           className="group relative rounded-lg border bg-white/60 p-2 text-sm"
-                       >
-                         <div className="aspect-square overflow-hidden rounded-md bg-slate-100">
-                           {(entry.status === "uploading" ||
-                               entry.status === "success") && (
-                               <div className="absolute inset-0 flex items-center justify-center bg-black/40 z-10 rounded-md">
-                                 {entry.status === "uploading" ? (
-                                     <Loader2 className="size-6 animate-spin text-white" />
-                                 ) : (
-                                     <Check className="size-6 text-emerald-400" />
-                                 )}
-                               </div>
-                           )}
-                           <img
-                               src={entry.thumbUrl}
-                               alt={entry.file.name}
-                               className="size-full object-cover"
-                           />
-                         </div>
+						{entries.length > 0 && (
+							<div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
+								{entries.map((entry) => (
+									<div
+										key={entry.id}
+										className="group relative rounded-lg border bg-white/60 p-2 text-sm"
+									>
+										<div className="aspect-square overflow-hidden rounded-md bg-slate-100">
+											{(entry.status === "uploading" ||
+												entry.status === "success") && (
+												<div className="absolute inset-0 flex items-center justify-center bg-black/40 z-10 rounded-md">
+													{entry.status === "uploading" ? (
+														<Loader2 className="size-6 animate-spin text-white" />
+													) : (
+														<Check className="size-6 text-emerald-400" />
+													)}
+												</div>
+											)}
+											<img
+												src={entry.thumbUrl}
+												alt={entry.file.name}
+												className="size-full object-cover"
+											/>
+										</div>
 
-                         <div className="mt-1.5 space-y-0.5">
-                           <p className="truncate font-medium">{entry.file.name}</p>
-                           <p className="text-slate-500">
-                             {formatBytes(entry.file.size)}
-                           </p>
-                         </div>
+										<div className="mt-1.5 space-y-0.5">
+											<p className="truncate font-medium">{entry.file.name}</p>
+											<p className="text-slate-500">
+												{formatBytes(entry.file.size)}
+											</p>
+										</div>
 
-                         {entry.status === "duplicate" && (
-                             <div className="absolute inset-0 flex items-center justify-center bg-amber-500/20 rounded-lg z-10">
+										{entry.status === "duplicate" && (
+											<div className="absolute inset-0 flex items-center justify-center bg-amber-500/20 rounded-lg z-10">
 												<span className="flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700">
 													<FileWarning className="size-3" />
 													Already exists
 												</span>
-                             </div>
-                         )}
-                         {entry.status === "error" && (
-                             <div className="absolute inset-0 flex items-center justify-center bg-rose-500/20 rounded-lg z-10">
+											</div>
+										)}
+										{entry.status === "error" && (
+											<div className="absolute inset-0 flex items-center justify-center bg-rose-500/20 rounded-lg z-10">
 												<span className="rounded-full bg-rose-100 px-2 py-0.5 text-xs font-medium text-rose-700">
 													{entry.error}
 												</span>
-                             </div>
-                         )}
+											</div>
+										)}
 
-                         {(entry.status === "pending" ||
-                             entry.status === "duplicate") && (
-                             <button
-                                 type="button"
-                                 onClick={() => handleRemove(entry.id)}
-                                 className="absolute right-2 top-2 z-10 rounded-full bg-white/80 p-1 text-slate-400 opacity-0 shadow transition-opacity hover:text-rose-600 group-hover:opacity-100"
-                             >
-                               <XIcon className="size-3.5" />
-                             </button>
-                         )}
-                       </div>
-                   ))}
-                 </div>
-             )}
-           </form>
-         </CardContent>
-       </Card>
-     </div>
+										{(entry.status === "pending" ||
+											entry.status === "duplicate") && (
+											<button
+												type="button"
+												onClick={() => handleRemove(entry.id)}
+												className="absolute right-2 top-2 z-10 rounded-full bg-white/80 p-1 text-slate-400 opacity-0 shadow transition-opacity hover:text-rose-600 group-hover:opacity-100"
+											>
+												<XIcon className="size-3.5" />
+											</button>
+										)}
+									</div>
+								))}
+							</div>
+						)}
+					</form>
+				</CardContent>
+			</Card>
+		</div>
 	);
 }

@@ -39,7 +39,7 @@ export const uploadRequestSchema = z.object({
 		.number()
 		.int()
 		.positive()
-		.max(50 * 1024 * 1024),
+		.max(2 * 1024 * 1024),
 	contentHash: z.string().length(64),
 });
 
@@ -52,7 +52,7 @@ export const finalizeUploadSchema = z.object({
 		.number()
 		.int()
 		.positive()
-		.max(50 * 1024 * 1024),
+		.max(2 * 1024 * 1024),
 	contentHash: z.string().length(64),
 });
 

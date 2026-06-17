@@ -15,6 +15,7 @@ import {
 	ChevronLeft,
 	ChevronRight,
 	Loader2,
+	TextInitial,
 	Trash2,
 } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -43,7 +44,12 @@ import {
 } from "#/components/ui/table.tsx";
 import type { DocumentRecord } from "#/lib/documents";
 import { formatBytes, formatDate } from "#/lib/format";
-import { deleteStoredDocument, getDocuments } from "#/lib/server-fns";
+import {
+	deleteStoredDocument,
+	getDocuments,
+	processDocument,
+} from "#/lib/server-fns";
+import type { TextractResult } from "#/lib/textract";
 
 type DocumentRow = DocumentRecord & { presignedUrl: string };
 
@@ -90,6 +96,13 @@ function DocumentsPage() {
 		null,
 	);
 	const [dialogOpen, setDialogOpen] = useState(false);
+	const [textractProcessingId, setTextractProcessingId] = useState<
+		string | null
+	>(null);
+	const [textractResult, setTextractResult] = useState<TextractResult | null>(
+		null,
+	);
+	const [textractDialogOpen, setTextractDialogOpen] = useState(false);
 
 	async function handleDelete(documentId: string, s3Key: string) {
 		setPendingIds((prev) => new Set(prev).add(documentId));
@@ -157,9 +170,9 @@ function DocumentsPage() {
 				<button
 					type="button"
 					onClick={() => {
-					setPreviewDocument(row.original);
-					setDialogOpen(true);
-				}}
+						setPreviewDocument(row.original);
+						setDialogOpen(true);
+					}}
 					className="block size-12 overflow-hidden rounded-md border border-slate-200 transition-shadow hover:ring-2 hover:ring-amber-500 focus:ring-2 focus:ring-amber-500 focus:outline-none"
 				>
 					<img
@@ -175,21 +188,40 @@ function DocumentsPage() {
 			id: "action",
 			header: "Action",
 			cell: ({ row }) => (
-				<Button
-					type="button"
-					variant="destructive"
-					size="sm"
-					onClick={() =>
-						handleDelete(row.original.documentId, row.original.s3Key)
-					}
-					disabled={pendingIds.has(row.original.documentId)}
-				>
-					{pendingIds.has(row.original.documentId) ? (
-						<Loader2 className="animate-spin" />
-					) : (
-						<Trash2 />
-					)}
-				</Button>
+				<div className="flex items-center gap-2">
+					<Button
+						type="button"
+						variant="outline"
+						size="sm"
+						onClick={() => handleTextract(row.original)}
+						disabled={textractProcessingId === row.original.documentId}
+						title="extract text from document"
+						aria-label="Extract text from document"
+					>
+						{textractProcessingId === row.original.documentId ? (
+							<Loader2 className="animate-spin" />
+						) : (
+							<TextInitial />
+						)}
+					</Button>
+					<Button
+						type="button"
+						variant="destructive"
+						size="sm"
+						onClick={() =>
+							handleDelete(row.original.documentId, row.original.s3Key)
+						}
+						disabled={pendingIds.has(row.original.documentId)}
+						title="delete"
+						aria-label="delete"
+					>
+						{pendingIds.has(row.original.documentId) ? (
+							<Loader2 className="animate-spin" />
+						) : (
+							<Trash2 />
+						)}
+					</Button>
+				</div>
 			),
 			enableSorting: false,
 		},
@@ -243,6 +275,26 @@ function DocumentsPage() {
 		}
 	}
 
+	async function handleTextract(doc: DocumentRow) {
+		setTextractProcessingId(doc.documentId);
+		setError(null);
+		try {
+			const result = await processDocument({
+				data: { documentId: doc.documentId, s3Key: doc.s3Key },
+			});
+			setTextractResult(result);
+			setTextractDialogOpen(true);
+		} catch (caught) {
+			setError(
+				caught instanceof Error
+					? caught.message
+					: "Textract processing failed.",
+			);
+		} finally {
+			setTextractProcessingId(null);
+		}
+	}
+
 	const selectedCount = Object.keys(rowSelection).length;
 
 	const currentIndex = previewDocument
@@ -276,35 +328,33 @@ function DocumentsPage() {
 					<p className="text-sm font-semibold uppercase tracking-[0.3em] text-amber-700">
 						Documents
 					</p>
-					<CardTitle className="mt-3 text-2xl">
-					</CardTitle>
-					<CardDescription className="mt-3 text-base">
-					</CardDescription>
+					<CardTitle className="mt-3 text-2xl"></CardTitle>
+					<CardDescription className="mt-3 text-base"></CardDescription>
 				</div>
 				<div className="flex gap-4 items-center">
-          <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-slate-700">
-            {selectedCount > 0
-                ? `${selectedCount} of ${documents.length} selected`
-                : `${documents.length} ${documents.length === 1 ? "document" : "documents"}`}
-          </div>
+					<div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-slate-700">
+						{selectedCount > 0
+							? `${selectedCount} of ${documents.length} selected`
+							: `${documents.length} ${documents.length === 1 ? "document" : "documents"}`}
+					</div>
 
-          {selectedCount > 0 && (
-              <Button
-                  type="button"
-                  variant="destructive"
-                  size="sm"
-                  onClick={handleDeleteSelected}
-                  disabled={pendingIds.size > 0}
-              >
-                {pendingIds.size > 0 ? (
-                    <Loader2 className="mr-1 animate-spin" />
-                ) : (
-                    <Trash2 className="mr-1" />
-                )}
-                Delete {selectedCount} selected
-              </Button>
-          )}
-        </div>
+					{selectedCount > 0 && (
+						<Button
+							type="button"
+							variant="destructive"
+							size="sm"
+							onClick={handleDeleteSelected}
+							disabled={pendingIds.size > 0}
+						>
+							{pendingIds.size > 0 ? (
+								<Loader2 className="mr-1 animate-spin" />
+							) : (
+								<Trash2 className="mr-1" />
+							)}
+							Delete {selectedCount} selected
+						</Button>
+					)}
+				</div>
 			</CardHeader>
 
 			<CardContent className="flex flex-1 flex-col overflow-hidden">
@@ -312,15 +362,13 @@ function DocumentsPage() {
 					<p className="mb-5 text-sm font-medium text-rose-700">{error}</p>
 				) : null}
 
-
-
 				{documents.length === 0 ? (
 					<div className="rounded-3xl border border-dashed border-slate-300 bg-slate-50 p-10 text-center text-slate-600">
 						No documents have been uploaded yet.
 					</div>
 				) : (
-					<div className="flex-1 overflow-y-auto rounded-3xl border border-slate-200">
-            <table className="min-w-full table-fixed text-sm">
+					<div className="flex-1 overflow-y-auto rounded border border-slate-200">
+						<table className="min-w-full table-fixed text-sm">
 							<TableHeader className="sticky top-0 z-10 bg-card">
 								{table.getHeaderGroups().map((headerGroup) => (
 									<TableRow key={headerGroup.id}>
@@ -358,10 +406,7 @@ function DocumentsPage() {
 					</div>
 				)}
 
-				<Dialog
-					open={dialogOpen}
-					onOpenChange={setDialogOpen}
-				>
+				<Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
 					<DialogTrigger />
 					<DialogContent
 						className="max-w-[90vw] sm:max-w-6xl"
@@ -415,6 +460,80 @@ function DocumentsPage() {
 										<p>{formatDate(previewDocument.createdAt)}</p>
 									</div>
 								</div>
+							</div>
+						)}
+					</DialogContent>
+				</Dialog>
+				<Dialog open={textractDialogOpen} onOpenChange={setTextractDialogOpen}>
+					<DialogTrigger />
+					<DialogContent className="max-w-[90vw] sm:max-w-4xl max-h-[90vh] overflow-y-auto">
+						<DialogTitle>Textract Results</DialogTitle>
+						<DialogDescription>
+							Layout and form data extracted via Amazon Textract
+						</DialogDescription>
+
+						{textractResult && (
+							<div className="space-y-6">
+								{textractResult.forms.length > 0 && (
+									<section>
+										<h3 className="mb-2 font-semibold">
+											Forms (Key-Value pairs)
+										</h3>
+										<div className="overflow-x-auto rounded-2xl border border-slate-200">
+											<table className="min-w-full text-sm">
+												<TableHeader>
+													<TableRow>
+														<TableHead>Key</TableHead>
+														<TableHead>Value</TableHead>
+														<TableHead>Confidence</TableHead>
+													</TableRow>
+												</TableHeader>
+												<TableBody>
+													{textractResult.forms.map((f) => (
+														<TableRow key={f.key}>
+															<TableCell className="font-medium">
+																{f.key}
+															</TableCell>
+															<TableCell>{f.value}</TableCell>
+															<TableCell>
+																{(f.confidence * 100).toFixed(1)}%
+															</TableCell>
+														</TableRow>
+													))}
+												</TableBody>
+											</table>
+										</div>
+									</section>
+								)}
+
+								{textractResult.layout.length > 0 && (
+									<section>
+										<h3 className="mb-2 font-semibold">Layout</h3>
+										<div className="space-y-1 text-sm">
+											{textractResult.layout.map((l) => (
+												<div
+													key={`${l.blockType}-${l.text}`}
+													className="flex items-start gap-2"
+												>
+													<span className="w-36 shrink-0 font-mono text-xs text-muted-foreground">
+														{l.blockType}
+													</span>
+													<span className="flex-1">{l.text}</span>
+													<span className="shrink-0 text-xs text-muted-foreground">
+														{(l.confidence * 100).toFixed(1)}%
+													</span>
+												</div>
+											))}
+										</div>
+									</section>
+								)}
+
+								{textractResult.forms.length === 0 &&
+									textractResult.layout.length === 0 && (
+										<p className="text-muted-foreground">
+											No text or forms detected.
+										</p>
+									)}
 							</div>
 						)}
 					</DialogContent>
