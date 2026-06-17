@@ -63,6 +63,8 @@ export const deleteDocumentSchema = z.object({
 	s3Key: z.string().trim().min(1).max(1024),
 });
 
+export const deleteDocumentsSchema = z.array(deleteDocumentSchema);
+
 export type DocumentRecord = {
 	documentId: string;
 	fileName: string;
@@ -234,5 +236,12 @@ export async function deleteDocument(
 		),
 	]);
 
+	return { success: true };
+}
+
+export async function deleteDocuments(
+	inputs: z.infer<typeof deleteDocumentsSchema>,
+) {
+	await Promise.all(inputs.map((input) => deleteDocument(input)));
 	return { success: true };
 }

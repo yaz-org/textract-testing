@@ -109,7 +109,7 @@ function DocumentsPage() {
 		setError(null);
 
 		try {
-			await deleteStoredDocument({ data: { documentId, s3Key } });
+			await deleteStoredDocument({ data: [{ documentId, s3Key }] });
 			await router.invalidate();
 		} catch (caught) {
 			setError(caught instanceof Error ? caught.message : "Delete failed.");
@@ -269,11 +269,7 @@ function DocumentsPage() {
 		setError(null);
 
 		try {
-			await Promise.all(
-				items.map(({ documentId, s3Key }) =>
-					deleteStoredDocument({ data: { documentId, s3Key } }),
-				),
-			);
+			await deleteStoredDocument({ data: items });
 			await router.invalidate();
 			setRowSelection({});
 		} catch (caught) {

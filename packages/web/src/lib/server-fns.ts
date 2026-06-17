@@ -3,8 +3,8 @@ import { z } from "zod";
 import type { UploadUrlResult } from "./documents";
 import {
 	createUploadUrls,
-	deleteDocument,
-	deleteDocumentSchema,
+	deleteDocuments,
+	deleteDocumentsSchema,
 	finalizeUploadSchema,
 	getPresignedUrl,
 	listDocuments,
@@ -41,9 +41,9 @@ export const finalizeDocumentUpload = createServerFn({ method: "POST" })
 	});
 
 export const deleteStoredDocument = createServerFn({ method: "POST" })
-	.validator(deleteDocumentSchema)
+	.validator(deleteDocumentsSchema)
 	.handler(async ({ data }) => {
-		return deleteDocument(data);
+		return deleteDocuments(data);
 	});
 
 export const processDocument = createServerFn({ method: "POST" })
