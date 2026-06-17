@@ -9,6 +9,7 @@ import {
 } from "@tanstack/react-router";
 import { TanStackRouterDevtoolsPanel } from "@tanstack/react-router-devtools";
 import { Button } from "#/components/ui/button.tsx";
+import { Toaster } from "#/components/ui/sonner.tsx";
 import { TooltipProvider } from "#/components/ui/tooltip.tsx";
 import TanStackQueryDevtools from "../integrations/tanstack-query/devtools";
 import appCss from "../styles.css?url";
@@ -99,6 +100,7 @@ function RootLayout() {
 					<Outlet />
 				</main>
 			</div>
+			<Toaster />
 		</TooltipProvider>
 	);
 }

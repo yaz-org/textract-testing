@@ -19,6 +19,7 @@ import {
 	Trash2,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import { toast } from "sonner";
 import { Badge } from "#/components/ui/badge.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import {
@@ -127,7 +128,11 @@ function DocumentsPage() {
 			id: "select",
 			header: ({ table }) => (
 				<Checkbox
-					checked={table.getIsAllPageRowsSelected()}
+					checked={
+						table.getIsSomeRowsSelected()
+							? "indeterminate"
+							: table.getIsAllPageRowsSelected()
+					}
 					onCheckedChange={(value) => table.toggleAllPageRowsSelected(!!value)}
 					aria-label="Select all"
 				/>
@@ -135,6 +140,7 @@ function DocumentsPage() {
 			cell: ({ row }) => (
 				<Checkbox
 					checked={row.getIsSelected()}
+					disabled={!row.getCanSelect()}
 					onCheckedChange={(value) => row.toggleSelected(!!value)}
 					aria-label="Select row"
 				/>
@@ -291,17 +297,49 @@ function DocumentsPage() {
 		setProcessing(true);
 		setError(null);
 
-		try {
-			await processDocument({ data: items });
-			await router.invalidate();
-			setRowSelection({});
-		} catch (caught) {
-			setError(
-				caught instanceof Error ? caught.message : "Some extractions failed.",
-			);
-		} finally {
-			setProcessing(false);
+		const BATCH_SIZE = 10;
+		const toastId = toast.loading(
+			`Starting extraction for ${items.length} document${items.length === 1 ? "" : "s"}...`,
+		);
+
+		let successCount = 0;
+		let failCount = 0;
+		let lastError: string | null = null;
+
+		for (let i = 0; i < items.length; i += BATCH_SIZE) {
+			const batch = items.slice(i, i + BATCH_SIZE);
+			const start = i + 1;
+			const end = Math.min(i + batch.length, items.length);
+
+			toast.loading(`Processing ${start}\u2013${end} of ${items.length}...`, {
+				id: toastId,
+			});
+
+			try {
+				await processDocument({ data: batch });
+				successCount += batch.length;
+			} catch (caught) {
+				failCount += batch.length;
+				lastError = caught instanceof Error ? caught.message : "Batch failed";
+			}
 		}
+
+		toast.dismiss(toastId);
+
+		if (failCount === 0) {
+			toast.success(
+				`Extraction complete for ${successCount} document${successCount === 1 ? "" : "s"}.`,
+			);
+		} else {
+			toast.error(
+				`${failCount} document${failCount === 1 ? "" : "s"} failed. ${successCount > 0 ? `${successCount} succeeded.` : ""}`,
+			);
+			if (lastError) setError(lastError);
+		}
+
+		await router.invalidate();
+		setRowSelection({});
+		setProcessing(false);
 	}
 
 	const selectedCount = Object.keys(rowSelection).length;
