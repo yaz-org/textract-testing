@@ -14,6 +14,10 @@ declare module "sst" {
       "name": string
       "type": "sst.aws.Dynamo"
     }
+    "HashLockTable": {
+      "name": string
+      "type": "sst.aws.Dynamo"
+    }
     "Web": {
       "type": "sst.aws.TanstackStart"
       "url": string

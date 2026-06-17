@@ -10,6 +10,7 @@ import {
 } from "#/components/ui/card.tsx";
 import { formatBytes, formatDate } from "#/lib/format";
 import { deleteStoredDocument, getDocuments } from "#/lib/server-fns";
+import {Trash2, Loader2} from "lucide-react";
 
 export const Route = createFileRoute("/documents")({
 	loader: async () => ({
@@ -108,8 +109,9 @@ function DocumentsPage() {
 													disabled={pendingId === document.documentId}
 												>
 													{pendingId === document.documentId
-														? "Deleting..."
-														: "Delete"}
+														? <Loader2 className="animate-spin"/>
+														: <Trash2 />
+                          }
 												</Button>
 											</td>
 										</tr>

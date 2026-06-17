@@ -1,7 +1,10 @@
 import "@tanstack/react-start/server-only";
 
 import { randomUUID } from "node:crypto";
-import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
+import {
+	ConditionalCheckFailedException,
+	DynamoDBClient,
+} from "@aws-sdk/client-dynamodb";
 import {
 	DeleteObjectCommand,
 	PutObjectCommand,
@@ -11,6 +14,7 @@ import {
 	DeleteCommand,
 	DynamoDBDocumentClient,
 	PutCommand,
+	QueryCommand,
 	ScanCommand,
 } from "@aws-sdk/lib-dynamodb";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
@@ -35,6 +39,7 @@ export const uploadRequestSchema = z.object({
 		.int()
 		.positive()
 		.max(50 * 1024 * 1024),
+	contentHash: z.string().length(64),
 });
 
 export const finalizeUploadSchema = z.object({
@@ -47,6 +52,7 @@ export const finalizeUploadSchema = z.object({
 		.int()
 		.positive()
 		.max(50 * 1024 * 1024),
+	contentHash: z.string().length(64),
 });
 
 export const deleteDocumentSchema = z.object({
@@ -60,12 +66,46 @@ export type DocumentRecord = {
 	s3Key: string;
 	contentType: string;
 	size: number;
+	contentHash: string;
 	createdAt: string;
 };
 
 export async function createUploadUrl(
 	input: z.infer<typeof uploadRequestSchema>,
 ) {
+	const existing = await dynamo.send(
+		new QueryCommand({
+			TableName: Resource.DocumentsTable.name,
+			IndexName: "HashIndex",
+			KeyConditionExpression: "contentHash = :hash",
+			ExpressionAttributeValues: { ":hash": input.contentHash },
+		}),
+	);
+
+	if (existing.Items && existing.Items.length > 0) {
+		throw new Error("A file with this content has already been uploaded.");
+	}
+
+	try {
+		await dynamo.send(
+			new PutCommand({
+				TableName: Resource.HashLockTable.name,
+				Item: {
+					contentHash: input.contentHash,
+					ttl: Math.floor(Date.now() / 1000) + 300,
+				},
+				ConditionExpression: "attribute_not_exists(contentHash)",
+			}),
+		);
+	} catch (error) {
+		if (error instanceof ConditionalCheckFailedException) {
+			throw new Error(
+				"This file is currently being uploaded by another process.",
+			);
+		}
+		throw error;
+	}
+
 	const documentId = randomUUID();
 	const sanitizedFileName = fileNameSchema.parse(input.fileName);
 	const s3Key = `${documentId}/${sanitizedFileName}`;
@@ -99,6 +139,13 @@ export async function saveDocumentRecord(
 			TableName: Resource.DocumentsTable.name,
 			Item: item,
 			ConditionExpression: "attribute_not_exists(documentId)",
+		}),
+	);
+
+	await dynamo.send(
+		new DeleteCommand({
+			TableName: Resource.HashLockTable.name,
+			Key: { contentHash: input.contentHash },
 		}),
 	);
 

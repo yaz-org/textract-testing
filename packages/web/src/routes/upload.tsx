@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { XIcon } from "lucide-react";
-import { useState } from "react";
+import { Check, FileWarning, Loader2, Trash2, XIcon } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 import { Button } from "#/components/ui/button.tsx";
 import {
 	Card,
@@ -14,6 +14,13 @@ import { Label } from "#/components/ui/label.tsx";
 import { formatBytes } from "#/lib/format";
 import { createDocumentUpload, finalizeDocumentUpload } from "#/lib/server-fns";
 
+async function computeSHA256(file: File): Promise<string> {
+	const buffer = await file.arrayBuffer();
+	const hashBuffer = await crypto.subtle.digest("SHA-256", buffer);
+	const hashArray = Array.from(new Uint8Array(hashBuffer));
+	return hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
 export const Route = createFileRoute("/upload")({
 	component: UploadPage,
 });
@@ -21,13 +28,24 @@ export const Route = createFileRoute("/upload")({
 interface FileEntry {
 	id: string;
 	file: File;
-	status: "pending" | "uploading" | "success" | "error";
+	thumbUrl: string;
+	status: "pending" | "uploading" | "success" | "error" | "duplicate";
 	error?: string;
 }
 
 function UploadPage() {
 	const [entries, setEntries] = useState<FileEntry[]>([]);
 	const [isUploading, setIsUploading] = useState(false);
+	const entriesRef = useRef(entries);
+	entriesRef.current = entries;
+
+	useEffect(() => {
+		return () => {
+			for (const entry of entriesRef.current) {
+				URL.revokeObjectURL(entry.thumbUrl);
+			}
+		};
+	}, []);
 
 	function handleFileSelect(event: React.ChangeEvent<HTMLInputElement>) {
 		const selected = Array.from(event.currentTarget.files ?? []);
@@ -38,6 +56,7 @@ function UploadPage() {
 			...selected.map((file) => ({
 				id: crypto.randomUUID(),
 				file,
+				thumbUrl: URL.createObjectURL(file),
 				status: "pending" as const,
 			})),
 		]);
@@ -46,7 +65,18 @@ function UploadPage() {
 	}
 
 	function handleRemove(id: string) {
-		setEntries((prev) => prev.filter((e) => e.id !== id));
+		setEntries((prev) => {
+			const entry = prev.find((e) => e.id === id);
+			if (entry) URL.revokeObjectURL(entry.thumbUrl);
+			return prev.filter((e) => e.id !== id);
+		});
+	}
+
+	function handleClearAll() {
+		for (const entry of entries) {
+			URL.revokeObjectURL(entry.thumbUrl);
+		}
+		setEntries([]);
 	}
 
 	function updateEntry(id: string, patch: Partial<FileEntry>) {
@@ -69,11 +99,14 @@ function UploadPage() {
 			updateEntry(entry.id, { status: "uploading", error: undefined });
 
 			try {
+				const contentHash = await computeSHA256(entry.file);
+
 				const upload = await createDocumentUpload({
 					data: {
 						fileName: entry.file.name,
 						contentType: entry.file.type || "application/octet-stream",
 						size: entry.file.size,
+						contentHash,
 					},
 				});
 
@@ -96,16 +129,21 @@ function UploadPage() {
 						s3Key: upload.s3Key,
 						contentType: entry.file.type || "application/octet-stream",
 						size: entry.file.size,
+						contentHash,
 					},
 				});
 
 				updateEntry(entry.id, { status: "success" });
 				successCount++;
 			} catch (caught) {
-				updateEntry(entry.id, {
-					status: "error",
-					error: caught instanceof Error ? caught.message : "Upload failed.",
-				});
+				const message =
+					caught instanceof Error ? caught.message : "Upload failed.";
+				const status =
+					message.includes("already been uploaded") ||
+					message.includes("currently being uploaded")
+						? "duplicate"
+						: "error";
+				updateEntry(entry.id, { status, error: message });
 			}
 		}
 
@@ -119,7 +157,7 @@ function UploadPage() {
 	const pendingCount = entries.filter((e) => e.status === "pending").length;
 
 	return (
-		<div className="grid gap-6 lg:grid-cols-[1fr_0.9fr]">
+		<div className="w-full">
 			<Card>
 				<CardHeader>
 					<p className="text-sm font-semibold uppercase tracking-[0.3em] text-amber-700">
@@ -140,6 +178,7 @@ function UploadPage() {
 							</Label>
 							<Input
 								multiple
+								accept="image/*"
 								name="document"
 								type="file"
 								id="document"
@@ -147,76 +186,93 @@ function UploadPage() {
 							/>
 						</div>
 
-						{entries.length > 0 && (
-							<ul className="space-y-2">
-								{entries.map((entry) => (
-									<li
-										key={entry.id}
-										className="flex items-center justify-between gap-3 rounded-lg border bg-white/60 px-3 py-2 text-sm"
-									>
-										<span className="min-w-0 truncate">{entry.file.name}</span>
-										<span className="shrink-0 text-slate-500">
-											{formatBytes(entry.file.size)}
-										</span>
+            <div className="flex gap-3">
+              <Button
+                  type="submit"
+                  disabled={isUploading || pendingCount === 0}
+              >
+                {isUploading
+                    ? "Uploading..."
+                    : pendingCount > 0
+                        ? `Upload ${pendingCount} file${pendingCount === 1 ? "" : "s"}`
+                        : "Upload files"}
+              </Button>
+              {entries.length > 0 && (
+                  <Button
+                      type="button"
+                      variant="outline"
+                      onClick={handleClearAll}
+                      disabled={isUploading}
+                  >
+                    <Trash2 className="mr-1.5 size-4" />
+                    Clear all
+                  </Button>
+              )}
+            </div>
 
-										{entry.status === "uploading" && (
-											<span className="size-4 animate-spin rounded-full border-2 border-slate-300 border-t-amber-600" />
-										)}
-										{entry.status === "success" && (
-											<span className="shrink-0 text-emerald-600">&check;</span>
+						{entries.length > 0 && (
+							<div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
+								{entries.map((entry) => (
+									<div
+										key={entry.id}
+										className="group relative rounded-lg border bg-white/60 p-2 text-sm"
+									>
+										<div className="aspect-square overflow-hidden rounded-md bg-slate-100">
+											{(entry.status === "uploading" ||
+												entry.status === "success") && (
+												<div className="absolute inset-0 flex items-center justify-center bg-black/40 z-10 rounded-md">
+													{entry.status === "uploading" ? (
+														<Loader2 className="size-6 animate-spin text-white" />
+													) : (
+														<Check className="size-6 text-emerald-400" />
+													)}
+												</div>
+											)}
+											<img
+												src={entry.thumbUrl}
+												alt={entry.file.name}
+												className="size-full object-cover"
+											/>
+										</div>
+
+										<div className="mt-1.5 space-y-0.5">
+											<p className="truncate font-medium">{entry.file.name}</p>
+											<p className="text-slate-500">
+												{formatBytes(entry.file.size)}
+											</p>
+										</div>
+
+										{entry.status === "duplicate" && (
+											<div className="absolute inset-0 flex items-center justify-center bg-amber-500/20 rounded-lg z-10">
+												<span className="flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700">
+													<FileWarning className="size-3" />
+													Already exists
+												</span>
+											</div>
 										)}
 										{entry.status === "error" && (
-											<span
-												className="shrink-0 text-rose-600"
-												title={entry.error}
-											>
-												&cross;
-											</span>
+											<div className="absolute inset-0 flex items-center justify-center bg-rose-500/20 rounded-lg z-10">
+												<span className="rounded-full bg-rose-100 px-2 py-0.5 text-xs font-medium text-rose-700">
+													{entry.error}
+												</span>
+											</div>
 										)}
 
-										{entry.status !== "uploading" && (
+										{(entry.status === "pending" || entry.status === "duplicate")
+                        && (
 											<button
 												type="button"
 												onClick={() => handleRemove(entry.id)}
-												className="shrink-0 rounded p-0.5 text-slate-400 hover:text-rose-600"
+												className="absolute right-2 top-2 z-10 rounded-full bg-white/80 p-1 text-slate-400 opacity-0 shadow transition-opacity hover:text-rose-600 group-hover:opacity-100"
 											>
-												<XIcon className="size-4" />
+												<XIcon className="size-3.5" />
 											</button>
 										)}
-									</li>
+									</div>
 								))}
-							</ul>
+							</div>
 						)}
-
-						<Button type="submit" disabled={isUploading || pendingCount === 0}>
-							{isUploading
-								? "Uploading..."
-								: pendingCount > 0
-									? `Upload ${pendingCount} file${pendingCount === 1 ? "" : "s"}`
-									: "Upload files"}
-						</Button>
 					</form>
-				</CardContent>
-			</Card>
-
-			<Card>
-				<CardHeader>
-					<CardTitle>Upload notes</CardTitle>
-				</CardHeader>
-				<CardContent>
-					<ul className="space-y-4 text-sm text-slate-700">
-						<li className="rounded-2xl bg-white/80 p-4">
-							Files are limited to {formatBytes(50 * 1024 * 1024)} in this first
-							pass.
-						</li>
-						<li className="rounded-2xl bg-white/80 p-4">
-							Metadata is written only after the S3 upload succeeds.
-						</li>
-						<li className="rounded-2xl bg-white/80 p-4">
-							The app is intentionally unauthenticated because it is for
-							internal use.
-						</li>
-					</ul>
 				</CardContent>
 			</Card>
 		</div>
