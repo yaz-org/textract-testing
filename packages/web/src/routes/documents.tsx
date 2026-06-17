@@ -12,11 +12,10 @@ import {
 	ArrowDown,
 	ArrowUp,
 	ArrowUpDown,
-	Check,
 	ChevronLeft,
 	ChevronRight,
 	Loader2,
-	TextInitial,
+	ScanText,
 	Trash2,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
@@ -50,7 +49,6 @@ import {
 	getDocuments,
 	processDocument,
 } from "#/lib/server-fns";
-import type { TextractResult } from "#/lib/textract";
 
 type DocumentRow = DocumentRecord & { presignedUrl: string };
 
@@ -92,18 +90,12 @@ function DocumentsPage() {
 	const [sorting, setSorting] = useState<SortingState>([]);
 	const [rowSelection, setRowSelection] = useState({});
 	const [pendingIds, setPendingIds] = useState<Set<string>>(new Set());
+	const [processing, setProcessing] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const [previewDocument, setPreviewDocument] = useState<DocumentRow | null>(
 		null,
 	);
 	const [dialogOpen, setDialogOpen] = useState(false);
-	const [textractProcessingId, setTextractProcessingId] = useState<
-		string | null
-	>(null);
-	const [textractResult, setTextractResult] = useState<TextractResult | null>(
-		null,
-	);
-	const [textractDialogOpen, setTextractDialogOpen] = useState(false);
 	const lastScrollTime = useRef(0);
 
 	async function handleDelete(documentId: string, s3Key: string) {
@@ -191,25 +183,6 @@ function DocumentsPage() {
 			header: "Action",
 			cell: ({ row }) => (
 				<div className="flex items-center gap-2">
-					{row.original.textractExtractedAt ? (
-						<Check className="size-5 text-emerald-600" aria-label="Extracted" />
-					) : (
-						<Button
-							type="button"
-							variant="outline"
-							size="sm"
-							onClick={() => handleTextract(row.original)}
-							disabled={textractProcessingId === row.original.documentId}
-							title="extract text from document"
-							aria-label="Extract text from document"
-						>
-							{textractProcessingId === row.original.documentId ? (
-								<Loader2 className="animate-spin" />
-							) : (
-								<TextInitial />
-							)}
-						</Button>
-					)}
 					<Button
 						type="button"
 						variant="destructive"
@@ -281,24 +254,26 @@ function DocumentsPage() {
 		}
 	}
 
-	async function handleTextract(doc: DocumentRow) {
-		setTextractProcessingId(doc.documentId);
+	async function handleProcessSelected() {
+		const selectedRows = table.getSelectedRowModel().rows;
+		const items = selectedRows.map((row) => ({
+			documentId: row.original.documentId,
+			s3Key: row.original.s3Key,
+		}));
+
+		setProcessing(true);
 		setError(null);
+
 		try {
-			const result = await processDocument({
-				data: { documentId: doc.documentId, s3Key: doc.s3Key },
-			});
-			setTextractResult(result);
-			setTextractDialogOpen(true);
+			await processDocument({ data: items });
 			await router.invalidate();
+			setRowSelection({});
 		} catch (caught) {
 			setError(
-				caught instanceof Error
-					? caught.message
-					: "Textract processing failed.",
+				caught instanceof Error ? caught.message : "Some extractions failed.",
 			);
 		} finally {
-			setTextractProcessingId(null);
+			setProcessing(false);
 		}
 	}
 
@@ -358,6 +333,22 @@ function DocumentsPage() {
 							: `${documents.length} ${documents.length === 1 ? "document" : "documents"}`}
 					</div>
 
+					{selectedCount > 0 && (
+						<Button
+							type="button"
+							variant="default"
+							size="sm"
+							onClick={handleProcessSelected}
+							disabled={processing}
+						>
+							{processing ? (
+								<Loader2 className="mr-1 animate-spin" />
+							) : (
+								<ScanText className="mr-1" />
+							)}
+							Extract text
+						</Button>
+					)}
 					{selectedCount > 0 && (
 						<Button
 							type="button"
@@ -434,128 +425,121 @@ function DocumentsPage() {
 					>
 						<DialogTitle className="sr-only">Document preview</DialogTitle>
 						<DialogDescription></DialogDescription>
-						{previewDocument && (
-							<div className="flex flex-col gap-6 sm:flex-row">
-								<div className="relative flex min-w-0 flex-1 items-start justify-center">
-									<button
-										type="button"
-										aria-label="Previous document"
-										onClick={goToPrev}
-										disabled={currentIndex === 0}
-										className="absolute left-2 top-1/2 z-10 -translate-y-1/2 rounded-full bg-black/40 p-2 text-white transition hover:bg-black/60 disabled:opacity-20 disabled:cursor-not-allowed"
-									>
-										<ChevronLeft className="size-6" />
-									</button>
-									<img
-										src={previewDocument.presignedUrl}
-										alt={previewDocument.fileName}
-										className="h-auto max-h-[80vh] w-full rounded-md object-contain"
-									/>
-									<button
-										type="button"
-										aria-label="Next document"
-										onClick={goToNext}
-										disabled={currentIndex === documents.length - 1}
-										className="absolute right-2 top-1/2 z-10 -translate-y-1/2 rounded-full bg-black/40 p-2 text-white transition hover:bg-black/60 disabled:opacity-20 disabled:cursor-not-allowed"
-									>
-										<ChevronRight className="size-6" />
-									</button>
-								</div>
-								<div className="w-72 shrink-0 space-y-4">
-									<div>
-										<h2 className="break-words text-lg font-semibold">
-											{previewDocument.fileName}
-										</h2>
+						<div className="-mx-4 no-scrollbar max-h-[90dvh] overflow-y-auto px-4 flex flex-col gap-2">
+							{previewDocument && (
+								<div className="flex flex-col gap-6 sm:flex-row">
+									<div className="relative flex min-w-0 flex-1 items-start justify-center">
+										<button
+											type="button"
+											aria-label="Previous document"
+											onClick={goToPrev}
+											disabled={currentIndex === 0}
+											className="absolute left-2 top-1/2 z-10 -translate-y-1/2 rounded-full bg-black/40 p-2 text-white transition hover:bg-black/60 disabled:opacity-20 disabled:cursor-not-allowed"
+										>
+											<ChevronLeft className="size-6" />
+										</button>
+										<img
+											src={previewDocument.presignedUrl}
+											alt={previewDocument.fileName}
+											className="h-auto max-h-[80vh] w-full rounded-md object-contain"
+										/>
+										<button
+											type="button"
+											aria-label="Next document"
+											onClick={goToNext}
+											disabled={currentIndex === documents.length - 1}
+											className="absolute right-2 top-1/2 z-10 -translate-y-1/2 rounded-full bg-black/40 p-2 text-white transition hover:bg-black/60 disabled:opacity-20 disabled:cursor-not-allowed"
+										>
+											<ChevronRight className="size-6" />
+										</button>
 									</div>
-									<div className="space-y-1 text-sm">
-										<p className="text-muted-foreground">Type</p>
-										<p>{previewDocument.contentType}</p>
-									</div>
-									<div className="space-y-1 text-sm">
-										<p className="text-muted-foreground">Size</p>
-										<p>{formatBytes(previewDocument.size)}</p>
-									</div>
-									<div className="space-y-1 text-sm">
-										<p className="text-muted-foreground">Created</p>
-										<p>{formatDate(previewDocument.createdAt)}</p>
-									</div>
-								</div>
-							</div>
-						)}
-					</DialogContent>
-				</Dialog>
-				<Dialog open={textractDialogOpen} onOpenChange={setTextractDialogOpen}>
-					<DialogTrigger />
-					<DialogContent className="max-w-[90vw] sm:max-w-4xl max-h-[90vh] overflow-y-auto">
-						<DialogTitle>Textract Results</DialogTitle>
-						<DialogDescription>
-							Layout and form data extracted via Amazon Textract
-						</DialogDescription>
-
-						{textractResult && (
-							<div className="space-y-6">
-								{textractResult.forms.length > 0 && (
-									<section>
-										<h3 className="mb-2 font-semibold">
-											Forms (Key-Value pairs)
-										</h3>
-										<div className="overflow-x-auto rounded-2xl border border-slate-200">
-											<table className="min-w-full text-sm">
-												<TableHeader>
-													<TableRow>
-														<TableHead>Key</TableHead>
-														<TableHead>Value</TableHead>
-														<TableHead>Confidence</TableHead>
-													</TableRow>
-												</TableHeader>
-												<TableBody>
-													{textractResult.forms.map((f) => (
-														<TableRow key={f.key}>
-															<TableCell className="font-medium">
-																{f.key}
-															</TableCell>
-															<TableCell>{f.value}</TableCell>
-															<TableCell>
-																{(f.confidence * 100).toFixed(1)}%
-															</TableCell>
-														</TableRow>
-													))}
-												</TableBody>
-											</table>
+									<div className="w-72 shrink-0 space-y-4">
+										<div>
+											<h2 className="break-words text-lg font-semibold">
+												{previewDocument.fileName}
+											</h2>
 										</div>
-									</section>
-								)}
-
-								{textractResult.layout.length > 0 && (
-									<section>
-										<h3 className="mb-2 font-semibold">Layout</h3>
 										<div className="space-y-1 text-sm">
-											{textractResult.layout.map((l) => (
-												<div
-													key={`${l.blockType}-${l.text}`}
-													className="flex items-start gap-2"
-												>
-													<span className="w-36 shrink-0 font-mono text-xs text-muted-foreground">
-														{l.blockType}
-													</span>
-													<span className="flex-1">{l.text}</span>
-													<span className="shrink-0 text-xs text-muted-foreground">
-														{(l.confidence * 100).toFixed(1)}%
-													</span>
-												</div>
-											))}
+											<p className="text-muted-foreground">Type</p>
+											<p>{previewDocument.contentType}</p>
 										</div>
-									</section>
-								)}
+										<div className="space-y-1 text-sm">
+											<p className="text-muted-foreground">Size</p>
+											<p>{formatBytes(previewDocument.size)}</p>
+										</div>
+										<div className="space-y-1 text-sm">
+											<p className="text-muted-foreground">Created</p>
+											<p>{formatDate(previewDocument.createdAt)}</p>
+										</div>
+									</div>
+								</div>
+							)}
 
-								{textractResult.forms.length === 0 &&
-									textractResult.layout.length === 0 && (
-										<p className="text-muted-foreground">
-											No text or forms detected.
-										</p>
+							{previewDocument?.textractResult && (
+								<div className="border-t border-slate-200 pt-6 mt-6 space-y-6">
+									{previewDocument.textractResult.forms.length > 0 && (
+										<section>
+											<h3 className="mb-2 font-semibold">
+												Forms (Key-Value pairs)
+											</h3>
+											<div className="overflow-x-auto rounded-2xl border border-slate-200">
+												<table className="min-w-full text-sm">
+													<TableHeader>
+														<TableRow>
+															<TableHead>Key</TableHead>
+															<TableHead>Value</TableHead>
+															<TableHead>Confidence</TableHead>
+														</TableRow>
+													</TableHeader>
+													<TableBody>
+														{previewDocument.textractResult.forms.map((f) => (
+															<TableRow key={f.key}>
+																<TableCell className="font-medium">
+																	{f.key}
+																</TableCell>
+																<TableCell>{f.value}</TableCell>
+																<TableCell>
+																	{(f.confidence * 100).toFixed(1)}%
+																</TableCell>
+															</TableRow>
+														))}
+													</TableBody>
+												</table>
+											</div>
+										</section>
 									)}
-							</div>
-						)}
+
+									{previewDocument.textractResult.layout.length > 0 && (
+										<section>
+											<h3 className="mb-2 font-semibold">Layout</h3>
+											<div className="space-y-1 text-sm">
+												{previewDocument.textractResult.layout.map((l) => (
+													<div
+														key={`${l.blockType}-${l.text}`}
+														className="flex items-start gap-2"
+													>
+														<span className="w-36 shrink-0 font-mono text-xs text-muted-foreground">
+															{l.blockType}
+														</span>
+														<span className="flex-1">{l.text}</span>
+														<span className="shrink-0 text-xs text-muted-foreground">
+															{(l.confidence * 100).toFixed(1)}%
+														</span>
+													</div>
+												))}
+											</div>
+										</section>
+									)}
+
+									{previewDocument.textractResult.forms.length === 0 &&
+										previewDocument.textractResult.layout.length === 0 && (
+											<p className="text-muted-foreground">
+												No text or forms detected.
+											</p>
+										)}
+								</div>
+							)}
+						</div>
 					</DialogContent>
 				</Dialog>
 			</CardContent>

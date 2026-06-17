@@ -47,9 +47,21 @@ export const deleteStoredDocument = createServerFn({ method: "POST" })
 	});
 
 export const processDocument = createServerFn({ method: "POST" })
-	.validator(z.object({ documentId: z.string().uuid(), s3Key: z.string() }))
+	.validator(
+		z.array(z.object({ documentId: z.string().uuid(), s3Key: z.string() })),
+	)
 	.handler(async ({ data }) => {
-		const result = await analyzeDocument(data.s3Key);
-		await saveTextractResult(data.documentId, result);
-		return result;
+		const results: { documentId: string; success: true }[] = [];
+		for (let i = 0; i < data.length; i += CONCURRENCY_MAX) {
+			const batch = data.slice(i, i + CONCURRENCY_MAX);
+			const batchResults = await Promise.all(
+				batch.map(async ({ documentId, s3Key }) => {
+					const result = await analyzeDocument(s3Key);
+					await saveTextractResult(documentId, result);
+					return { documentId, success: true as const };
+				}),
+			);
+			results.push(...batchResults);
+		}
+		return results;
 	});
