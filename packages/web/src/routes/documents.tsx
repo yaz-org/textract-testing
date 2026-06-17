@@ -19,6 +19,7 @@ import {
 	Trash2,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import { Badge } from "#/components/ui/badge.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import {
 	Card,
@@ -42,6 +43,11 @@ import {
 	TableHeader,
 	TableRow,
 } from "#/components/ui/table.tsx";
+import {
+	Tooltip,
+	TooltipContent,
+	TooltipTrigger,
+} from "#/components/ui/tooltip.tsx";
 import type { DocumentRecord } from "#/lib/documents";
 import { formatBytes, formatDate } from "#/lib/format";
 import {
@@ -154,8 +160,33 @@ function DocumentsPage() {
 			cell: ({ row }) => formatDate(row.getValue<string>("createdAt")),
 		},
 		{
-			accessorKey: "s3Key",
-			header: ({ column }) => <SortHeader column={column} label="S3 Key" />,
+			id: "extracted",
+			header: "Extracted",
+			cell: ({ row }) => {
+				if (!row.original.textractResult) {
+					return <span className="text-muted-foreground">—</span>;
+				}
+
+				if (!row.original.textractExtractedAt) {
+					return (
+						<span className="text-muted-foreground">
+							No extracted date found
+						</span>
+					);
+				}
+
+				return (
+					<Tooltip>
+						<TooltipTrigger asChild>
+							<Badge variant="default">Extracted</Badge>
+						</TooltipTrigger>
+						<TooltipContent>
+							{formatDate(row.original.textractExtractedAt)}
+						</TooltipContent>
+					</Tooltip>
+				);
+			},
+			enableSorting: false,
 		},
 		{
 			id: "preview",
