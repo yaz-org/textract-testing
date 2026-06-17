@@ -8,8 +8,16 @@ import {
 	type SortingState,
 	useReactTable,
 } from "@tanstack/react-table";
-import { ArrowDown, ArrowUp, ArrowUpDown, Loader2, Trash2 } from "lucide-react";
-import { useState } from "react";
+import {
+	ArrowDown,
+	ArrowUp,
+	ArrowUpDown,
+	ChevronLeft,
+	ChevronRight,
+	Loader2,
+	Trash2,
+} from "lucide-react";
+import { useEffect, useState } from "react";
 import { Button } from "#/components/ui/button.tsx";
 import {
 	Card,
@@ -237,6 +245,30 @@ function DocumentsPage() {
 
 	const selectedCount = Object.keys(rowSelection).length;
 
+	const currentIndex = previewDocument
+		? documents.findIndex((d) => d.documentId === previewDocument.documentId)
+		: -1;
+
+	const goToPrev = () => {
+		if (currentIndex > 0) setPreviewDocument(documents[currentIndex - 1]);
+	};
+
+	const goToNext = () => {
+		if (currentIndex < documents.length - 1) {
+			setPreviewDocument(documents[currentIndex + 1]);
+		}
+	};
+
+	useEffect(() => {
+		if (!dialogOpen) return;
+		function handleKeyDown(e: KeyboardEvent) {
+			if (e.key === "ArrowLeft") goToPrev();
+			else if (e.key === "ArrowRight") goToNext();
+		}
+		window.addEventListener("keydown", handleKeyDown);
+		return () => window.removeEventListener("keydown", handleKeyDown);
+	});
+
 	return (
 		<Card className="h-full">
 			<CardHeader className="sm:flex-row sm:items-end sm:justify-between">
@@ -339,12 +371,30 @@ function DocumentsPage() {
 						<DialogDescription></DialogDescription>
 						{previewDocument && (
 							<div className="flex flex-col gap-6 sm:flex-row">
-								<div className="flex min-w-0 flex-1 items-start justify-center">
+								<div className="relative flex min-w-0 flex-1 items-start justify-center">
+									<button
+										type="button"
+										aria-label="Previous document"
+										onClick={goToPrev}
+										disabled={currentIndex === 0}
+										className="absolute left-2 top-1/2 z-10 -translate-y-1/2 rounded-full bg-black/40 p-2 text-white transition hover:bg-black/60 disabled:opacity-20 disabled:cursor-not-allowed"
+									>
+										<ChevronLeft className="size-6" />
+									</button>
 									<img
 										src={previewDocument.presignedUrl}
 										alt={previewDocument.fileName}
 										className="h-auto max-h-[80vh] w-full rounded-md object-contain"
 									/>
+									<button
+										type="button"
+										aria-label="Next document"
+										onClick={goToNext}
+										disabled={currentIndex === documents.length - 1}
+										className="absolute right-2 top-1/2 z-10 -translate-y-1/2 rounded-full bg-black/40 p-2 text-white transition hover:bg-black/60 disabled:opacity-20 disabled:cursor-not-allowed"
+									>
+										<ChevronRight className="size-6" />
+									</button>
 								</div>
 								<div className="w-72 shrink-0 space-y-4">
 									<div>
