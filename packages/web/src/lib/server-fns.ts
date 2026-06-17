@@ -4,6 +4,7 @@ import {
 	deleteDocument,
 	deleteDocumentSchema,
 	finalizeUploadSchema,
+	getPresignedUrl,
 	listDocuments,
 	saveDocumentRecord,
 	uploadRequestSchema,
@@ -11,7 +12,13 @@ import {
 
 export const getDocuments = createServerFn({ method: "GET" }).handler(
 	async () => {
-		return listDocuments();
+		const documents = await listDocuments();
+		return Promise.all(
+			documents.map(async (doc) => ({
+				...doc,
+				presignedUrl: await getPresignedUrl(doc.s3Key),
+			})),
+		);
 	},
 );
 

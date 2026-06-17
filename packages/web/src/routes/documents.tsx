@@ -8,6 +8,11 @@ import {
 	CardHeader,
 	CardTitle,
 } from "#/components/ui/card.tsx";
+import {
+	Dialog,
+	DialogContent,
+	DialogTitle,
+} from "#/components/ui/dialog.tsx";
 import { formatBytes, formatDate } from "#/lib/format";
 import { deleteStoredDocument, getDocuments } from "#/lib/server-fns";
 import {Trash2, Loader2} from "lucide-react";
@@ -24,6 +29,7 @@ function DocumentsPage() {
 	const router = useRouter();
 	const [pendingId, setPendingId] = useState<string | null>(null);
 	const [error, setError] = useState<string | null>(null);
+	const [previewUrl, setPreviewUrl] = useState<string | null>(null);
 
 	async function handleDelete(documentId: string, s3Key: string) {
 		setPendingId(documentId);
@@ -79,6 +85,7 @@ function DocumentsPage() {
 										<th className="px-4 py-3 font-medium">Size</th>
 										<th className="px-4 py-3 font-medium">Created</th>
 										<th className="px-4 py-3 font-medium">S3 Key</th>
+										<th className="px-4 py-3 font-medium">Preview</th>
 										<th className="px-4 py-3 font-medium">Action</th>
 									</tr>
 								</thead>
@@ -97,6 +104,19 @@ function DocumentsPage() {
 											</td>
 											<td className="px-4 py-4 text-xs text-slate-500">
 												{document.s3Key}
+											</td>
+											<td className="px-4 py-4">
+												<button
+													type="button"
+													onClick={() => setPreviewUrl(document.presignedUrl)}
+													className="block size-12 overflow-hidden rounded-md border border-slate-200 transition-shadow hover:ring-2 hover:ring-amber-500 focus:ring-2 focus:ring-amber-500 focus:outline-none"
+												>
+													<img
+														src={document.presignedUrl}
+														alt={document.fileName}
+														className="size-full object-cover"
+													/>
+												</button>
 											</td>
 											<td className="px-4 py-4">
 												<Button
@@ -121,6 +141,23 @@ function DocumentsPage() {
 						</div>
 					</div>
 				)}
+			<Dialog
+					open={!!previewUrl}
+					onOpenChange={(open) => {
+						if (!open) setPreviewUrl(null);
+					}}
+				>
+					<DialogContent className="max-w-[90vw] w-auto sm:max-w-[90vw]">
+						<DialogTitle className="sr-only">Image preview</DialogTitle>
+						{previewUrl && (
+							<img
+								src={previewUrl}
+								alt="Preview"
+								className="mx-auto max-h-[80vh] w-auto rounded-md object-contain"
+							/>
+						)}
+					</DialogContent>
+				</Dialog>
 			</CardContent>
 		</Card>
 	);

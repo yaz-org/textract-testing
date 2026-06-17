@@ -7,6 +7,7 @@ import {
 } from "@aws-sdk/client-dynamodb";
 import {
 	DeleteObjectCommand,
+	GetObjectCommand,
 	PutObjectCommand,
 	S3Client,
 } from "@aws-sdk/client-s3";
@@ -150,6 +151,14 @@ export async function saveDocumentRecord(
 	);
 
 	return item;
+}
+
+export async function getPresignedUrl(s3Key: string) {
+	const command = new GetObjectCommand({
+		Bucket: Resource.Documents.name,
+		Key: s3Key,
+	});
+	return getSignedUrl(s3, command, { expiresIn: 3600 });
 }
 
 export async function listDocuments() {
