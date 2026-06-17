@@ -3,3 +3,4 @@
 
 
 bunx sst dev
+bunx sst deploy --stage production
