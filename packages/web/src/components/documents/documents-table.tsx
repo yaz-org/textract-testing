@@ -18,14 +18,16 @@ import {
 } from "#/components/ui/table.tsx";
 import type { DocumentRecord } from "#/lib/documents";
 import { cn } from "#/lib/utils";
-import { getColumns, type DocumentRow } from "./columns";
+import { type DocumentRow, getColumns } from "./columns";
 
 interface DocumentsTableProps {
 	data: DocumentRow[];
 	onDelete: (document: DocumentRecord) => void;
 	onPreviewSelected: (document: DocumentRow) => void;
 	onDeleteSelected: (items: { documentId: string; s3Key: string }[]) => void;
-	onProcessSelected: (items: { documentId: string; s3Key: string }[]) => Promise<void>;
+	onProcessSelected: (
+		items: { documentId: string; s3Key: string }[],
+	) => Promise<void>;
 	pendingIds: Set<string>;
 	processing: boolean;
 	error: string | null;
@@ -80,12 +82,10 @@ export function DocumentsTable({
 	});
 
 	function extractSelectedItems() {
-		return table
-			.getSelectedRowModel()
-			.rows.map((row) => ({
-				documentId: row.original.documentId,
-				s3Key: row.original.s3Key,
-			}));
+		return table.getSelectedRowModel().rows.map((row) => ({
+			documentId: row.original.documentId,
+			s3Key: row.original.s3Key,
+		}));
 	}
 
 	async function handleDeleteSelected() {
