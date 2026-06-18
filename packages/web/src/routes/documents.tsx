@@ -23,6 +23,7 @@ import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Badge } from "#/components/ui/badge.tsx";
 import { Button } from "#/components/ui/button.tsx";
+import { Checkbox } from "#/components/ui/checkbox.tsx";
 import {
 	Dialog,
 	DialogContent,
@@ -30,7 +31,6 @@ import {
 	DialogTitle,
 	DialogTrigger,
 } from "#/components/ui/dialog.tsx";
-import { Input } from "#/components/ui/input";
 import { Label } from "#/components/ui/label";
 import {
 	TableBody,
@@ -89,31 +89,6 @@ function SortHeader<TData, TValue>({
 
 const columnHelper = createColumnHelper<DocumentRow>();
 
-function IndeterminateCheckbox({
-	indeterminate,
-	className = "",
-	...rest
-}: { indeterminate?: boolean } & React.HTMLProps<HTMLInputElement>) {
-  const ref = useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    if (typeof indeterminate === "boolean" && ref.current) {
-      ref.current.indeterminate = !rest.checked && indeterminate;
-    }
-  }, [indeterminate, rest.checked]);
-
-	return (
-		<Label className="flex items-center w-full justify-center p-2">
-			<Input
-				type="checkbox"
-				ref={ref}
-				className={cn("cursor-pointer h-4 w-4", className)}
-				{...rest}
-			/>
-		</Label>
-	);
-}
-
 function getColumns({
 	onDelete,
 	onPreviewSelected,
@@ -129,27 +104,33 @@ function getColumns({
 			enableSorting: false,
 			enableHiding: false,
 			header: ({ table }) => (
-				<IndeterminateCheckbox
-					{...{
-						checked: table.getIsAllPageRowsSelected(),
-						indeterminate: table.getIsSomePageRowsSelected(),
-						onChange: table.getToggleAllPageRowsSelectedHandler(),
-						"aria-label": "Select all",
-						title: "Select all",
-					}}
-				/>
+				<Label className="flex items-center w-full justify-center p-3 cursor-pointer">
+					<Checkbox
+						className="size-4 cursor-pointer"
+						checked={
+							table.getIsSomeRowsSelected()
+								? "indeterminate"
+								: table.getIsAllRowsSelected()
+						}
+						onCheckedChange={(checked) =>
+							table.toggleAllRowsSelected(checked === true)
+						}
+						aria-label="Select all"
+						title="Select all"
+					/>
+				</Label>
 			),
 			cell: ({ row }) => (
-				<IndeterminateCheckbox
-					{...{
-						checked: row.getIsSelected(),
-						disabled: !row.getCanSelect(),
-						indeterminate: row.getIsSomeSelected(),
-						onChange: row.getToggleSelectedHandler(),
-						"aria-label": `Select row ${row.original.fileName}`,
-						title: `Select row ${row.original.fileName}`,
-					}}
-				/>
+				<Label className="flex items-center w-full justify-center p-3 cursor-pointer">
+					<Checkbox
+						className="size-4 cursor-pointer"
+						checked={row.getIsSelected()}
+						disabled={!row.getCanSelect()}
+						onCheckedChange={row.getToggleSelectedHandler()}
+						aria-label={`Select row ${row.original.fileName}`}
+						title={`Select row ${row.original.fileName}`}
+					/>
+				</Label>
 			),
 		}),
 		columnHelper.accessor("fileName", {
