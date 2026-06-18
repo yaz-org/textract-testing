@@ -94,13 +94,13 @@ function IndeterminateCheckbox({
 	className = "",
 	...rest
 }: { indeterminate?: boolean } & React.HTMLProps<HTMLInputElement>) {
-	const ref = useRef<HTMLInputElement>(null!);
+  const ref = useRef<HTMLInputElement>(null);
 
-	useEffect(() => {
-		if (typeof indeterminate === "boolean") {
-			ref.current.indeterminate = !rest.checked && indeterminate;
-		}
-	}, [indeterminate, rest.checked]);
+  useEffect(() => {
+    if (typeof indeterminate === "boolean" && ref.current) {
+      ref.current.indeterminate = !rest.checked && indeterminate;
+    }
+  }, [indeterminate, rest.checked]);
 
 	return (
 		<Label className="flex items-center w-full justify-center p-2">
