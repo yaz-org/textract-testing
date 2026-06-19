@@ -20,6 +20,7 @@ import {
 	UpdateCommand,
 } from "@aws-sdk/lib-dynamodb";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+import { ZipArchive } from "archiver";
 import { Resource } from "sst";
 import { z } from "zod";
 import type { TextractResult } from "./textract";
@@ -244,4 +245,49 @@ export async function deleteDocuments(
 ) {
 	await Promise.all(inputs.map((input) => deleteDocument(input)));
 	return { success: true };
+}
+
+export async function exportDocumentsZip(): Promise<{ presignedUrl: string }> {
+	const documents = await listDocuments();
+
+	const withResults = documents.filter(
+		(doc): doc is DocumentRecord & { textractResult: TextractResult } =>
+			doc.textractResult !== undefined,
+	);
+
+	const archive = new ZipArchive({ zlib: { level: 9 } });
+	const chunks: Buffer[] = [];
+
+	archive.on("data", (chunk: Buffer) => chunks.push(chunk));
+
+	for (const doc of withResults) {
+		archive.append(JSON.stringify(doc.textractResult, null, 2), {
+			name: `${doc.fileName}.json`,
+		});
+	}
+
+	await archive.finalize();
+	const zipBuffer = Buffer.concat(chunks);
+
+	const zipKey = `exports/documents-export-${Date.now()}.zip`;
+
+	await s3.send(
+		new PutObjectCommand({
+			Bucket: Resource.Documents.name,
+			Key: zipKey,
+			Body: zipBuffer,
+			ContentType: "application/zip",
+		}),
+	);
+
+	const presignedUrl = await getSignedUrl(
+		s3,
+		new GetObjectCommand({
+			Bucket: Resource.Documents.name,
+			Key: zipKey,
+		}),
+		{ expiresIn: 3600 },
+	);
+
+	return { presignedUrl };
 }

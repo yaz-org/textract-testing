@@ -5,6 +5,7 @@ import {
 	createUploadUrls,
 	deleteDocuments,
 	deleteDocumentsSchema,
+	exportDocumentsZip,
 	finalizeUploadSchema,
 	getPresignedUrl,
 	listDocuments,
@@ -65,3 +66,9 @@ export const processDocument = createServerFn({ method: "POST" })
 		}
 		return results;
 	});
+
+export const exportDocumentsAsZip = createServerFn({ method: "POST" }).handler(
+	async () => {
+		return exportDocumentsZip();
+	},
+);

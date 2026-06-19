@@ -6,7 +6,7 @@ import {
 	useReactTable,
 } from "@tanstack/react-table";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { Loader2, ScanText, Trash2 } from "lucide-react";
+import { Download, Loader2, ScanText, Trash2 } from "lucide-react";
 import { useRef, useState } from "react";
 import { Button } from "#/components/ui/button.tsx";
 import {
@@ -28,6 +28,8 @@ interface DocumentsTableProps {
 	onProcessSelected: (
 		items: { documentId: string; s3Key: string }[],
 	) => Promise<void>;
+	onExportZip: () => void;
+	exportingZip: boolean;
 	pendingIds: Set<string>;
 	processing: boolean;
 	error: string | null;
@@ -39,6 +41,8 @@ export function DocumentsTable({
 	onPreviewSelected,
 	onDeleteSelected,
 	onProcessSelected,
+	onExportZip,
+	exportingZip,
 	pendingIds,
 	processing,
 	error,
@@ -98,6 +102,7 @@ export function DocumentsTable({
 	}
 
 	const selectedCount = Object.keys(rowSelection).length;
+	const hasExtractedResults = data.some((doc) => doc.textractResult);
 
 	return (
 		<div className="flex h-full min-h-0 flex-col gap-6 rounded-xl border bg-card py-6 shadow-sm">
@@ -140,6 +145,21 @@ export function DocumentsTable({
 							Delete {selectedCount} selected
 						</Button>
 					)}
+
+					<Button
+						type="button"
+						variant="outline"
+						size="sm"
+						onClick={onExportZip}
+						disabled={!hasExtractedResults || exportingZip}
+					>
+						{exportingZip ? (
+							<Loader2 className="mr-1 animate-spin" />
+						) : (
+							<Download className="mr-1" />
+						)}
+						{exportingZip ? "Downloading..." : "Download results"}
+					</Button>
 
 					<div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-slate-700">
 						{selectedCount > 0

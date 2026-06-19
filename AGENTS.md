@@ -1,3 +1,6 @@
+Use bun instead of pnpm, don't use npm, and use `bunx` instead of `pnpm dlx` for running one-off commands.
+
+
 <!-- intent-skills:start -->
 ## Skill Loading
 

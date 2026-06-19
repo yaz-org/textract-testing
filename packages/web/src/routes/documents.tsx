@@ -9,6 +9,7 @@ import { PreviewDialog } from "#/components/documents/preview-dialog.tsx";
 import type { DocumentRecord } from "#/lib/documents";
 import {
 	deleteStoredDocument,
+	exportDocumentsAsZip,
 	getDocuments,
 	processDocument,
 } from "#/lib/server-fns";
@@ -107,6 +108,26 @@ function DocumentsPage() {
 		},
 	});
 
+	const exportZipMutation = useMutation<{ presignedUrl: string }, Error>({
+		mutationFn: () => exportDocumentsAsZip(),
+		onSuccess: ({ presignedUrl }) => {
+			const a = document.createElement("a");
+			a.href = presignedUrl;
+			a.download = "documents-export.zip";
+			a.click();
+			toast.success("Download started.");
+		},
+		onError: (caught) => {
+			setError(
+				caught instanceof Error ? caught.message : "Export failed.",
+			);
+		},
+	});
+
+	function handleExportZip() {
+		exportZipMutation.mutate();
+	}
+
 	function handleDelete(document: DocumentRecord) {
 		deleteMutation.mutate([
 			{ documentId: document.documentId, s3Key: document.s3Key },
@@ -157,6 +178,8 @@ function DocumentsPage() {
 				}}
 				onDeleteSelected={handleDeleteSelected}
 				onProcessSelected={handleProcessSelected}
+				onExportZip={handleExportZip}
+				exportingZip={exportZipMutation.isPending}
 				pendingIds={pendingIds}
 				processing={processMutation.isPending}
 				error={error}
