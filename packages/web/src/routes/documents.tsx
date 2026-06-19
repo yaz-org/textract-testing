@@ -43,8 +43,8 @@ function DocumentsPage() {
 			});
 			setError(null);
 		},
-		onSuccess: () => {
-			queryClient.invalidateQueries({ queryKey: ["documents"] });
+		onSuccess: async () => {
+			await queryClient.invalidateQueries({ queryKey: ["documents"] });
 		},
 		onError: (caught) => {
 			setError(caught instanceof Error ? caught.message : "Delete failed.");
@@ -102,8 +102,8 @@ function DocumentsPage() {
 				if (lastError) setError(lastError);
 			}
 		},
-		onSettled: () => {
-			queryClient.invalidateQueries({ queryKey: ["documents"] });
+		onSettled: async () => {
+			await queryClient.invalidateQueries({ queryKey: ["documents"] });
 		},
 	});
 
