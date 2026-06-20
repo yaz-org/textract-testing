@@ -7,30 +7,42 @@
 - **Script**: `packages/scripts/validate_doctr.py` (UV-managed Python 3.11)
 - **Dependencies**: `python-doctr==1.0.1`, CPU-only PyTorch 2.12.1, Pillow, Rich
 - **Run**: `cd packages/scripts && uv run validate_doctr.py`
+- **Parallel**: `MAX_WORKERS=4 uv run validate_doctr.py` (4 workers × 4 threads, ~2 min)
 - **Images**: 366 JPG files in `exports/dream-team-images/` (~25MB total)
-- **Sample**: 10 images picked by even file-size distribution (covers different bank UIs)
 
-### Results
+### Results (full 366-image run)
 
 | Metric | Value |
 |---|---|
-| Images with text detected | 9/10 (90%) |
-| Valid receipts (score >= 4) | 8/10 (80%) |
-| Average inference time (warm) | 2.9s |
-| Average word confidence | 89% |
-| Field: Amount found | 8/10 (80%) |
-| Field: Date found | 8/10 (80%) |
-| Field: Bank found | 7/10 (70%) |
-| Field: Phone found | 6/10 (60%) |
-| Field: Cedula found | 6/10 (60%) |
-| Field: Reference found | 5/10 (50%) |
+| Valid receipts (score >= 4) | **260/366 (71%)** |
+| Non-receipts correctly filtered | 106 (29%) — score < 4 |
+| Average inference (4 workers × 4 threads) | 1.3s per image |
+| Total wall time (4 workers) | **127s (2 min)** |
+| Average word confidence | 85% |
+| Field: Reference found (valid receipts) | 259/260 (100%) |
+| Field: Amount found (valid receipts) | 252/260 (97%) |
+| Field: Date found (valid receipts) | 260/260 (100%) |
+| Field: Phone found (valid receipts) | 252/260 (97%) |
+| Field: Bank found (valid receipts) | 260/260 (100%) |
+| Field: Cedula found (valid receipts) | 204/260 (78%) |
+
+### Extraction fixes applied
+
+| Fix | What changed | Impact |
+|---|---|---|
+| Reference: phone exclusion | Skip 04-prefixed 11-digit numbers in reference fallback | Prevents phone masquerading as reference |
+| Phone: loose regex | `LOOSE_PHONE` handles separators anywhere (e.g., `0414-329-7358`) | Catches phones with dashes/dots between digits |
+| Amount: sort by value | Pick highest amount across all lines (prefers thousands-separator) | Fixes "533,00" → "3.533,00" multi-line case |
+| Bank: all-lines scan | Check every line for bank name after labeled search falls short | Bank 89% → 100% among valid receipts |
+| Cedula: all-lines scan | Scan all lines for V/E/J/G-prefixed IDs | Cedula 73% → 78% among valid receipts |
+| Cedula: case-insensitive | `CEDULA_PREFIXED` regex gets `re.IGNORECASE` for lowercase "v-" | Catches OCR output like "v-12345678" |
 
 ### Key Observations
 
-1. **docTR OCR quality is good** — 89% average confidence on all detected text. Works well on Banplus, BNC, Banesco, and Mercantil receipt layouts.
-2. **Non-receipt images correctly filtered** — 1 image was a chat screenshot (score 0, no payment keywords), 1 was a 12KB thumbnail (207x244px, no text to detect).
-3. **Reference detection (50%) is an extraction logic issue, not OCR** — some bank layouts (e.g., Banesco) put the reference number on a different relative line position than our `find_value_near_label` function expects. The OCR captures the text correctly, but the parser misses it.
-4. **Average inference 2.9s** — acceptable for manual invocation, fine for Lambda with cold start tolerance.
+1. **docTR OCR quality is good** — 85% average confidence on all detected text. Works well on Banplus, BNC, Banesco, and Mercantil receipt layouts.
+2. **Non-receipt images correctly filtered** — ~106 images (chat screenshots, thumbnails, other banking UIs) scored < 4 and are correctly excluded.
+3. **Reference/cedula gaps were extraction logic issues, not OCR** — The OCR captures text correctly, but parser missed layout-specific field positions. Regex-based fixes brought reference to 100%, cedula to 78%.
+4. **Average inference 0.8s (warm, sequential)** / **1.3s (4 workers)** — well within Lambda timeout tolerance.
 5. **Model config works** — `assume_straight_pages=True`, orientation disabled, `preserve_aspect_ratio=True` all correct for phone screenshots.
 
 ### Raw OCR Samples (correctly captured)
@@ -561,3 +573,169 @@ FAST models (tiny/small/base) have good accuracy but target rotated/scene text. 
 | Docker image >10GB (Lambda limit) | CPU-only torch is ~200MB; model weights ~150MB; total image should be <1GB |
 | Bank logo/text in screenshot confuses detection | Detection only finds text, not logos; bank name in text is what we match on |
 | Different bank apps have different layouts | Even sampling by file size in validation covers multiple layouts; regex-based extraction is layout-agnostic |
+
+---
+
+## Performance Optimizations
+
+### Current baseline (366 images)
+
+| Config | Total wall time | Avg inference | Speedup |
+|---|---|---|---|
+| Sequential (no thread cap) | 1672s (28 min) | 4.6s | 1× |
+| Sequential (`DOCTR_NUM_THREADS=20`) | 213s (3.5 min) | 0.6s | 7.8× |
+| **4 workers, 4 threads each** | **127s (2 min)** | 1.3s | **13×** |
+
+### Option 1: Multiprocessing (implemented)
+
+**Status:** ✅ Implemented in `validate_doctr.py`
+
+Split images into batches and process with `ProcessPoolExecutor` (4 workers × 4 threads each).
+
+```bash
+# Default (sequential) — compatible with original behavior
+uv run validate_doctr.py
+
+# Parallel with 4 workers (auto-calculates 4 threads each)
+MAX_WORKERS=4 uv run validate_doctr.py
+
+# Parallel with 2 workers, override threads
+MAX_WORKERS=2 DOCTR_NUM_THREADS=8 uv run validate_doctr.py
+```
+
+**Thread budget auto-calculation** (`max(4, 12 // workers)`):
+
+| Workers | Threads per worker | Total threads |
+|---|---|---|
+| 1 | 12 (effectively uncapped) | 12 |
+| 2 | 6 | 12 |
+| 3 | 4 | 12 |
+| 4+ | 4 | 16+ |
+
+**How it works:**
+- Images split into `MAX_WORKERS` equal batches
+- Each worker loads its own model + warmup in a subprocess
+- Workers run in parallel via `ProcessPoolExecutor` (fork)
+- Results collected, sorted by filename, then table/summary built
+
+**Tradeoffs:**
+- Each worker loads ~150MB model → 4 workers = ~600MB RAM peak
+- No per-image progress during parallel phase (progress shown after each batch completes)
+- With fork, workers inherit parent's memory — ensure no large objects before forking
+
+### Option 2: Model warmup (implemented)
+
+**Status:** ✅ Added to `load_model()` and `process_batch()`
+
+After loading model weights, runs a dummy 100×100 white JPEG through the model to
+trigger PyTorch JIT compilation upfront. Without warmup, the first 10-20 images
+pay a ~2-3s JIT compilation penalty each. Warmup absorbs this at model load time.
+
+```python
+buf = BytesIO()
+Image.new("RGB", (100, 100), "white").save(buf, format="JPEG")
+dummy = DocumentFile.from_images(buf.getvalue())
+model(dummy)
+```
+
+### Option 3: Image resize before inference (plan)
+
+**Status:** 📝 Not yet implemented — planned for ONNX path
+
+Resize images to a consistent max dimension before feeding to the model to reduce
+computation on large screenshots.
+
+```python
+from PIL import Image
+import numpy as np
+
+MAX_DIM = 720  # max pixels on longest side
+
+def resize_for_doctr(img_path: Path) -> np.ndarray:
+    img = Image.open(img_path)
+    w, h = img.size
+    if max(w, h) > MAX_DIM:
+        ratio = MAX_DIM / max(w, h)
+        new_size = (int(w * ratio), int(h * ratio))
+        img = img.resize(new_size, Image.LANCZOS)
+    return np.array(img)
+
+# Use instead of DocumentFile.from_images:
+arr = resize_for_doctr(img_path)
+doc = DocumentFile.from_images(arr)
+```
+
+**When to apply:** After ONNX export (which needs fixed-shape inputs). For the
+PyTorch path, docTR already resizes internally to 1024px, so this only saves
+the internal resize step (~5-10% speedup). With ONNX (fixed 640×640 detection
+input), the speedup is more significant (~30%).
+
+**Current image sizes:** Phone screenshots range from 498×1080 to 1000×1280.
+Resizing to 720px on the longest side reduces pixel count by ~2× while
+preserving text readability for screenshots.
+
+### Option 4: ONNX Runtime (plan)
+
+**Status:** 📝 Not yet implemented — outlined for future optimization
+
+**Goal:** Export docTR models to ONNX and run via ONNX Runtime for 2-3× per-image speedup on CPU.
+
+**Steps:**
+
+1. **Add dependencies** to `pyproject.toml`:
+```toml
+onnxruntime>=1.20
+onnx>=1.17
+```
+
+2. **Export models** — docTR supports `exportable=True`:
+```python
+from doctr.models import detection, recognition
+
+det_model = detection.db_mobilenet_v3_large(
+    pretrained=True, exportable=True
+)
+reco_model = recognition.crnn_mobilenet_v3_small(
+    pretrained=True, exportable=True
+)
+
+import torch
+dummy_det = torch.randn(1, 3, 1024, 1024)
+torch.onnx.export(det_model, dummy_det, "det_model.onnx",
+                  opset_version=17, input_names=["input"], output_names=["output"])
+
+dummy_reco = torch.randn(64, 3, 32, 128)
+torch.onnx.export(reco_model, dummy_reco, "reco_model.onnx",
+                  opset_version=17, input_names=["input"], output_names=["output"])
+```
+
+3. **Run ONNX inference** instead of `ocr_predictor`:
+```python
+import onnxruntime as ort
+
+session_det = ort.InferenceSession("det_model.onnx")
+session_reco = ort.InferenceSession("reco_model.onnx")
+
+def predict_onnx(image):
+    # Reuse docTR pre/post-processing, replace forward pass
+    ...
+```
+
+**Complexity:** Moderate. docTR's pre/post-processing can be reused; only the
+PyTorch forward pass is replaced with ONNX Runtime calls.
+
+**Estimated speedup:** 2-3× per inference (stacked with multiprocessing: ~45s total)
+
+**Tradeoffs:**
+- Adds ~100MB to Lambda image (ONNX runtime)
+- Model re-export needed when updating docTR versions
+- Some docTR ops may not export cleanly (need to verify)
+
+### Implementation order recommendation
+
+| Step | Effort | Speedup | Cumulative |
+|---|---|---|---|
+| 1. Warmup ✅ | 2 lines | ~15s | 213 → 198s |
+| 2. Multiprocessing ✅ | ~40 lines | ~85s | 198 → 127s |
+| 3. ONNX Runtime ⏳ | Medium | ~70s | 127 → 60s |
+| 4. Image resize ⏳ | 3 lines | ~10s | 60 → 50s |

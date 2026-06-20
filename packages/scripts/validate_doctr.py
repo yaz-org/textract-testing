@@ -12,6 +12,7 @@ Environment variables:
     IMAGES_DIR: override the images directory path (default: ../exports/dream-team-images)
     SAMPLE_SIZE: number of images to process (0 = all, default: 0)
     DOCTR_NUM_THREADS: PyTorch CPU thread limit (0 = no cap, default: 0)
+    MAX_WORKERS: parallel worker processes (0 = sequential, default: 0)
 """
 
 from __future__ import annotations
@@ -20,7 +21,9 @@ import json
 import os
 import re
 import time
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
+from multiprocessing import cpu_count
 from pathlib import Path
 from typing import Any
 
@@ -41,6 +44,7 @@ IMAGES_DIR = Path(os.getenv("IMAGES_DIR", str(_SCRIPT_DIR / "../../exports/dream
 SAMPLE_SIZE = int(os.getenv("SAMPLE_SIZE", "0"))
 SCORE_THRESHOLD = 4  # minimum score to consider a valid pago móvil receipt
 DOCTR_NUM_THREADS = int(os.getenv("DOCTR_NUM_THREADS", "0"))  # 0 = no cap
+MAX_WORKERS = int(os.getenv("MAX_WORKERS", "0"))  # 0 = sequential (default for validation)
 
 # ---------------------------------------------------------------------------
 # Venezuelan bank registry (ported from packages/web/src/lib/banks.ts)
@@ -630,7 +634,69 @@ def load_model():
     )
 
     console.print("[green]✓ Model loaded[/green]")
+
+    # Warmup: dummy inference to trigger PyTorch JIT compilation
+    console.print("  Warming up model...", end="")
+    from PIL import Image
+    from io import BytesIO
+    buf = BytesIO()
+    Image.new("RGB", (100, 100), "white").save(buf, format="JPEG")
+    dummy = DocumentFile.from_images(buf.getvalue())
+    model(dummy)
+    console.print(" done")
     return model
+
+
+# ---------------------------------------------------------------------------
+# Multiprocessing worker
+# ---------------------------------------------------------------------------
+
+
+def process_batch(batch: list[Path]) -> list[dict]:
+    """Process a batch of images in a worker process."""
+    num_threads = int(os.getenv("DOCTR_NUM_THREADS", "0"))
+    if num_threads > 0:
+        torch.set_num_threads(num_threads)
+    model = ocr_predictor(
+        det_arch="db_mobilenet_v3_large",
+        reco_arch="crnn_mobilenet_v3_small",
+        pretrained=True,
+        assume_straight_pages=True,
+        preserve_aspect_ratio=True,
+        disable_page_orientation=True,
+        disable_crop_orientation=True,
+        det_bs=1,
+    )
+    # Warmup
+    from PIL import Image
+    from io import BytesIO
+    buf = BytesIO()
+    Image.new("RGB", (100, 100), "white").save(buf, format="JPEG")
+    dummy = DocumentFile.from_images(buf.getvalue())
+    model(dummy)
+
+    results: list[dict] = []
+    for img_path in batch:
+        entry: dict = {"path": img_path.name}
+        try:
+            doc = DocumentFile.from_images(str(img_path))
+            start = time.time()
+            result_doc = model(doc)
+            elapsed = time.time() - start
+            text_lines = result_doc.render().splitlines()
+            text_lines = [t.strip() for t in text_lines if t.strip()]
+            extraction = extract_all_fields(text_lines)
+            avg_conf = compute_average_confidence(result_doc)
+            entry.update({
+                "elapsed": elapsed,
+                "extraction": extraction,
+                "avg_conf": avg_conf,
+                "text_lines": text_lines,
+            })
+        except Exception as e:
+            entry["error"] = str(e)
+        results.append(entry)
+    return results
 
 
 # ---------------------------------------------------------------------------
@@ -670,10 +736,58 @@ def main():
     console.print(f"  {label}")
     console.print()
 
-    # Load model
-    model = load_model()
+    main_start = time.time()
+    all_results: list[dict] = []
 
-    # Process each sample
+    if MAX_WORKERS > 0:
+        workers = min(MAX_WORKERS, len(processed_images))
+        # Auto-set thread budget per worker to avoid CPU oversubscription
+        if int(os.getenv("DOCTR_NUM_THREADS", "0")) == 0:
+            budget = max(4, 12 // max(1, workers))
+            os.environ["DOCTR_NUM_THREADS"] = str(budget)
+        batch_size = (len(processed_images) + workers - 1) // workers
+        batches = [processed_images[i:i + batch_size] for i in range(0, len(processed_images), batch_size)]
+        console.print(f"  Using [cyan]{workers}[/cyan] parallel workers, [cyan]{os.environ['DOCTR_NUM_THREADS']}[/cyan] threads each")
+        console.print()
+
+        with ProcessPoolExecutor(max_workers=workers) as executor:
+            futures = {executor.submit(process_batch, batch): i for i, batch in enumerate(batches)}
+            for future in as_completed(futures):
+                try:
+                    batch_results = future.result()
+                    all_results.extend(batch_results)
+                except Exception as e:
+                    console.print(f"[red]✗ Worker failed: {e}[/red]")
+        all_results.sort(key=lambda r: r["path"])
+    else:
+        model = load_model()
+        for idx, img_path in enumerate(processed_images):
+            rel_path = img_path.name
+            entry: dict = {"path": rel_path}
+            console.print(f"  [{idx + 1}/{len(processed_images)}] {rel_path} ...")
+            try:
+                doc = DocumentFile.from_images(str(img_path))
+                start = time.time()
+                result_doc = model(doc)
+                elapsed = time.time() - start
+                text_lines = result_doc.render().splitlines()
+                text_lines = [t.strip() for t in text_lines if t.strip()]
+                extraction = extract_all_fields(text_lines)
+                avg_conf = compute_average_confidence(result_doc)
+                entry.update({
+                    "elapsed": elapsed,
+                    "extraction": extraction,
+                    "avg_conf": avg_conf,
+                    "text_lines": text_lines,
+                })
+            except Exception as e:
+                entry["error"] = str(e)
+            all_results.append(entry)
+            c = entry.get("avg_conf")
+        conf_display = f"{c:.0%}" if c is not None else "--"
+        console.print(f"  [{idx + 1}/{len(processed_images)}] {rel_path} — {entry.get('elapsed', 0):.1f}s, score={entry.get('extraction', ExtractionResult()).score}, conf={conf_display}")
+
+    # Build table
     results_table = Table(title="docTR Extraction Results", title_style="bold")
     results_table.add_column("Image", style="cyan", no_wrap=True)
     results_table.add_column("Score", style="yellow")
@@ -692,35 +806,19 @@ def main():
     conf_count = 0
     valid_count = 0
     issues: list[str] = []
-    processed_count = 0
-    main_start = time.time()
+    processed_count = len(all_results)
 
-    for img_path in processed_images:
-        rel_path = img_path.name
-        console.print(f"  [{processed_count + 1}/{len(processed_images)}] {rel_path} ...")
-
-        # Load and run
-        try:
-            doc = DocumentFile.from_images(str(img_path))
-        except Exception as e:
-            issues.append(f"{rel_path}: failed to load image — {e}")
+    for data in all_results:
+        rel_path = data["path"]
+        if "error" in data:
+            issues.append(f"{rel_path}: {data['error']}")
             results_table.add_row(rel_path, "ERR", "", "", "", "", "", "", "", "")
             continue
 
-        start = time.time()
-        try:
-            result_doc = model(doc)
-        except Exception as e:
-            issues.append(f"{rel_path}: docTR inference failed — {e}")
-            results_table.add_row(rel_path, "ERR", "", "", "", "", "", "", "", "")
-            continue
-        elapsed = time.time() - start
-
-        # Render and extract
-        text_lines = result_doc.render().splitlines()
-        text_lines = [t.strip() for t in text_lines if t.strip()]
-        extraction = extract_all_fields(text_lines)
-        avg_conf = compute_average_confidence(result_doc)
+        elapsed = data["elapsed"]
+        extraction = data["extraction"]
+        avg_conf = data["avg_conf"]
+        text_lines = data["text_lines"]
 
         total_time += elapsed
         if avg_conf is not None:
@@ -731,7 +829,6 @@ def main():
         if is_valid:
             valid_count += 1
 
-        # Track field detection
         for key in ["reference", "amount", "date", "phone"]:
             val = getattr(extraction, key, None)
             if val:
@@ -759,10 +856,6 @@ def main():
             dest_phone_str, dest_bank_str, time_str, conf_str, lines_str,
         )
 
-        processed_count += 1
-        console.print(f"  [{processed_count}/{len(processed_images)}] {rel_path} — {elapsed:.1f}s, score={extraction.score}, conf={conf_str}")
-
-        # Check for low confidence or issues
         if avg_conf is not None and avg_conf < 0.7:
             issues.append(f"{rel_path}: low confidence ({avg_conf:.0%})")
 
