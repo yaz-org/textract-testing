@@ -1,0 +1,13 @@
+[project]
+name = "doctr-validate"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "python-doctr>=1.0",
+    "pillow",
+    "rich",
+]
+
+[tool.uv]
+index-url = "https://download.pytorch.org/whl/cpu"
+extra-index-url = ["https://pypi.org/simple"]
