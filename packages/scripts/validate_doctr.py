@@ -887,7 +887,7 @@ def main():
 
     if issues:
         console.print()
-        console.print("  [yellow]Issues flagged:[/yellow]")
+        console.print(f"  [yellow]Issues flagged ({len(issues)}):[/yellow]")
         for issue in issues:
             console.print(f"    • {issue}")
 
