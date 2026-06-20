@@ -84,11 +84,45 @@ export function getColumns({
 					return <span className="text-muted-foreground">—</span>;
 				}
 
-				if (!row.original.textractExtractedAt) {
+				const payment = row.original.paymentResult;
+
+				if (!payment) {
+					const date = row.original.textractExtractedAt;
+					if (!date) {
+						return (
+							<span className="text-muted-foreground">
+								No extracted date found
+							</span>
+						);
+					}
 					return (
-						<span className="text-muted-foreground">
-							No extracted date found
-						</span>
+						<div className="flex items-center">
+							<Tooltip>
+								<TooltipTrigger asChild>
+									<Badge variant="secondary">OCR</Badge>
+								</TooltipTrigger>
+								<TooltipContent>{formatDate(date)}</TooltipContent>
+							</Tooltip>
+						</div>
+					);
+				}
+
+				if (payment.status === "VALID") {
+					return (
+						<div className="flex items-center">
+							<Tooltip>
+								<TooltipTrigger asChild>
+									<Badge>Pago Móvil</Badge>
+								</TooltipTrigger>
+								<TooltipContent>
+									<span>
+										Ref: {payment.referenceNumber}
+										<br />
+										Monto: Bs. {payment.amount}
+									</span>
+								</TooltipContent>
+							</Tooltip>
+						</div>
 					);
 				}
 
@@ -96,11 +130,9 @@ export function getColumns({
 					<div className="flex items-center">
 						<Tooltip>
 							<TooltipTrigger asChild>
-								<Badge variant="default">Extracted</Badge>
+								<Badge variant="outline">No payment</Badge>
 							</TooltipTrigger>
-							<TooltipContent>
-								{formatDate(row.original.textractExtractedAt)}
-							</TooltipContent>
+							<TooltipContent>No pago móvil data found</TooltipContent>
 						</Tooltip>
 					</div>
 				);

@@ -14,6 +14,7 @@ import {
 import {
 	DeleteCommand,
 	DynamoDBDocumentClient,
+	GetCommand,
 	PutCommand,
 	QueryCommand,
 	ScanCommand,
@@ -23,6 +24,7 @@ import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { ZipArchive } from "archiver";
 import { Resource } from "sst";
 import { z } from "zod";
+import type { PagoMovilPayment } from "./payment";
 import type { TextractResult } from "./textract";
 
 const s3 = new S3Client({});
@@ -76,6 +78,7 @@ export type DocumentRecord = {
 	createdAt: string;
 	textractResult?: TextractResult;
 	textractExtractedAt?: string;
+	paymentResult?: PagoMovilPayment;
 };
 
 export async function createUploadUrl(
@@ -181,6 +184,23 @@ export async function saveDocumentRecord(
 	return item;
 }
 
+export async function savePaymentResult(
+	documentId: string,
+	result: PagoMovilPayment,
+) {
+	await dynamo.send(
+		new UpdateCommand({
+			TableName: Resource.DocumentsTable.name,
+			Key: { documentId },
+			UpdateExpression: "SET paymentResult = :result",
+			ConditionExpression: "attribute_exists(documentId)",
+			ExpressionAttributeValues: {
+				":result": result,
+			},
+		}),
+	);
+}
+
 export async function saveTextractResult(
 	documentId: string,
 	result: TextractResult,
@@ -217,6 +237,18 @@ export async function listDocuments() {
 	return ((response.Items ?? []) as DocumentRecord[]).sort((left, right) =>
 		right.createdAt.localeCompare(left.createdAt),
 	);
+}
+
+export async function getDocument(
+	documentId: string,
+): Promise<DocumentRecord | undefined> {
+	const response = await dynamo.send(
+		new GetCommand({
+			TableName: Resource.DocumentsTable.name,
+			Key: { documentId },
+		}),
+	);
+	return response.Item as DocumentRecord | undefined;
 }
 
 export async function deleteDocument(

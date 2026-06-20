@@ -21,7 +21,7 @@ export const Route = createFileRoute("/documents")({
 function DocumentsPage() {
 	const queryClient = useQueryClient();
 
-	const { data: documents, isLoading } = useQuery({
+	const documentsQuery = useQuery({
 		queryKey: ["documents"],
 		queryFn: () => getDocuments(),
 	});
@@ -118,9 +118,7 @@ function DocumentsPage() {
 			toast.success("Download started.");
 		},
 		onError: (caught) => {
-			setError(
-				caught instanceof Error ? caught.message : "Export failed.",
-			);
+			setError(caught instanceof Error ? caught.message : "Export failed.");
 		},
 	});
 
@@ -147,11 +145,24 @@ function DocumentsPage() {
 		setPendingIds(new Set());
 	}
 
-	if (isLoading) {
+	if (documentsQuery.isLoading) {
 		return <DocumentsTableSkeleton />;
 	}
 
-	const docs = documents ?? [];
+  if (documentsQuery.isError) {
+    return (
+      <div className="p-4 text-red-600">
+        <p>Failed to load documents.</p>
+        <p className="mt-1 text-sm">
+          {documentsQuery.error instanceof Error
+            ? documentsQuery.error.message
+            : "An unknown error occurred."}
+        </p>
+      </div>
+    );
+  }
+
+	const docs = documentsQuery.data ?? [];
 
 	const currentIndex = previewDocument
 		? docs.findIndex((d) => d.documentId === previewDocument.documentId)

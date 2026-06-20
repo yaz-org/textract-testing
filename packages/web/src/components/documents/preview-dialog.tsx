@@ -1,5 +1,6 @@
-import { ChevronLeft, ChevronRight } from "lucide-react";
+import { ChevronLeft, ChevronRight, Loader2, ScanText } from "lucide-react";
 import { useEffect, useRef } from "react";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import {
 	Dialog,
 	DialogContent,
@@ -14,7 +15,9 @@ import {
 	TableHeader,
 	TableRow,
 } from "#/components/ui/table.tsx";
+import { Button } from "#/components/ui/button.tsx";
 import { formatBytes, formatDate } from "#/lib/format";
+import { reprocessPayment } from "#/lib/server-fns";
 import type { DocumentRow } from "./columns";
 
 interface PreviewDialogProps {
@@ -66,6 +69,17 @@ export function PreviewDialog({
 		};
 	});
 
+	const queryClient = useQueryClient();
+
+	const reprocessMutation = useMutation({
+		mutationFn: async (documentId: string) => {
+			await reprocessPayment({ data: { documentId } });
+		},
+		onSettled: async () => {
+			await queryClient.invalidateQueries({ queryKey: ["documents"] });
+		},
+	});
+
 	return (
 		<Dialog open={open} onOpenChange={onOpenChange}>
 			<DialogTrigger />
@@ -109,6 +123,23 @@ export function PreviewDialog({
 										{previewDocument.fileName}
 									</h2>
 								</div>
+								<Button
+									type="button"
+									variant="outline"
+									size="sm"
+									className="w-full gap-1.5"
+									onClick={() =>
+										reprocessMutation.mutate(previewDocument.documentId)
+									}
+									disabled={reprocessMutation.isPending}
+								>
+									{reprocessMutation.isPending ? (
+										<Loader2 className="size-4 animate-spin" />
+									) : (
+										<ScanText className="size-4" />
+									)}
+									Process again
+								</Button>
 								<div className="space-y-1 text-sm">
 									<p className="text-muted-foreground">Type</p>
 									<p>{previewDocument.contentType}</p>
@@ -122,6 +153,72 @@ export function PreviewDialog({
 									<p>{formatDate(previewDocument.createdAt)}</p>
 								</div>
 							</div>
+						</div>
+					)}
+
+					{previewDocument?.paymentResult?.status === "VALID" && (
+						<div className="border-t border-slate-200 pt-6 mt-6 space-y-3">
+							<h3 className="font-semibold">Pago Móvil Data</h3>
+							<dl className="grid grid-cols-1 gap-x-4 gap-y-2 text-sm sm:grid-cols-2">
+								<div>
+									<dt className="text-muted-foreground">Referencia</dt>
+									<dd className="font-mono font-medium">
+										{previewDocument.paymentResult.referenceNumber}
+									</dd>
+								</div>
+								<div>
+									<dt className="text-muted-foreground">Monto</dt>
+									<dd className="font-medium">
+										Bs. {previewDocument.paymentResult.amount}
+									</dd>
+								</div>
+								<div>
+									<dt className="text-muted-foreground">Fecha</dt>
+									<dd>{previewDocument.paymentResult.date}</dd>
+								</div>
+								{previewDocument.paymentResult.originPhone && (
+									<div>
+										<dt className="text-muted-foreground">Teléfono origen</dt>
+										<dd className="font-mono">
+											{previewDocument.paymentResult.originPhone}
+										</dd>
+									</div>
+								)}
+								{previewDocument.paymentResult.destinationPhone && (
+									<div>
+										<dt className="text-muted-foreground">Teléfono destino</dt>
+										<dd className="font-mono">
+											{previewDocument.paymentResult.destinationPhone}
+										</dd>
+									</div>
+								)}
+								{previewDocument.paymentResult.destinationCedula && (
+									<div>
+										<dt className="text-muted-foreground">Cédula destino</dt>
+										<dd className="font-mono">
+											{previewDocument.paymentResult.destinationCedula}
+										</dd>
+									</div>
+								)}
+								{previewDocument.paymentResult.originBank && (
+									<div>
+										<dt className="text-muted-foreground">Banco origen</dt>
+										<dd>{previewDocument.paymentResult.originBank}</dd>
+									</div>
+								)}
+								{previewDocument.paymentResult.destinationBank && (
+									<div>
+										<dt className="text-muted-foreground">Banco destino</dt>
+										<dd>{previewDocument.paymentResult.destinationBank}</dd>
+									</div>
+								)}
+								{previewDocument.paymentResult.concept && (
+									<div>
+										<dt className="text-muted-foreground">Concepto</dt>
+										<dd>{previewDocument.paymentResult.concept}</dd>
+									</div>
+								)}
+							</dl>
 						</div>
 					)}
 

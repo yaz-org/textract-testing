@@ -7,12 +7,15 @@ import {
 	deleteDocumentsSchema,
 	exportDocumentsZip,
 	finalizeUploadSchema,
+	getDocument,
 	getPresignedUrl,
 	listDocuments,
 	saveDocumentRecord,
+	savePaymentResult,
 	saveTextractResult,
 	uploadRequestSchema,
 } from "./documents";
+import { extractPagoMovil } from "./payment-extractor";
 import { analyzeDocument } from "./textract";
 
 export const CONCURRENCY_MAX = 10;
@@ -58,13 +61,31 @@ export const processDocument = createServerFn({ method: "POST" })
 			const batchResults = await Promise.all(
 				batch.map(async ({ documentId, s3Key }) => {
 					const result = await analyzeDocument(s3Key);
-					await saveTextractResult(documentId, result);
+					const paymentResult = extractPagoMovil(result);
+					await Promise.all([
+						saveTextractResult(documentId, result),
+						savePaymentResult(documentId, paymentResult),
+					]);
 					return { documentId, success: true as const };
 				}),
 			);
 			results.push(...batchResults);
 		}
 		return results;
+	});
+
+export const reprocessPayment = createServerFn({ method: "POST" })
+	.validator(z.object({ documentId: z.string().uuid() }))
+	.handler(async ({ data }) => {
+		const doc = await getDocument(data.documentId);
+		if (!doc?.textractResult) {
+			throw new Error(
+				"No textract result found — run full processing first.",
+			);
+		}
+		const paymentResult = extractPagoMovil(doc.textractResult);
+		await savePaymentResult(data.documentId, paymentResult);
+		return paymentResult;
 	});
 
 export const exportDocumentsAsZip = createServerFn({ method: "POST" }).handler(
