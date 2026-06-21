@@ -20,7 +20,6 @@ import {
 } from "./documents";
 import { extractPagoMovil } from "./payment-extractor";
 import { analyzeDocument } from "./textract";
-import type { DoctrResult} from "#/lib/payment";
 
 const lambda = new LambdaClient({});
 
@@ -119,9 +118,11 @@ async function docTrProcess(documentId: string, s3Key: string) {
     );
   }
 
-  const result = payload as DoctrResult;
-  await saveDoctrResult(documentId, result);
-  return result;
+  console.log(payload)
+
+  // const result = payload as DoctrResult;
+  await saveDoctrResult(documentId, payload);
+  return payload;
 }
 
 export const reprocessPayment = createServerFn({ method: "POST" })

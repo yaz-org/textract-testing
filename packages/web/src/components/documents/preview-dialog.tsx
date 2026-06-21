@@ -42,6 +42,7 @@ export function PreviewDialog({
 	goToNext,
 	onClose,
 }: PreviewDialogProps) {
+  console.log("Doctr result", previewDocument?.doctrResult);
 	const lastScrollTime = useRef(0);
 
 	useEffect(() => {

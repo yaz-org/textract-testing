@@ -409,11 +409,11 @@ After validation confirms docTR works on the images:
 │ (TS)     │     │ doctr (TS)   │     │ Python      │────▶│  S3  │
 │          │     │ server fn    │     │ Lambda      │     │      │
 └──────────┘     └──────────────┘     └──────┬──────┘     └──────┘
-                                             │
-                                             ▼
-                                        ┌──────────┐
-                                        │ DynamoDB │
-                                        └──────────┘
+                                              │
+                                              ▼
+                                         ┌──────────┐
+                                         │ DynamoDB │
+                                         └──────────┘
 ```
 
 ### File: `packages/doctr-lambda/`
@@ -498,10 +498,11 @@ FROM public.ecr.aws/lambda/python:3.13
 RUN dnf install -y libxcb mesa-libGL && dnf clean all
 
 ENV DOCTR_MULTIPROCESSING_DISABLE=TRUE
-ENV DOCTR_CACHE_DIR=/opt/doctr_cache
+ENV DOCTR_CACHE_DIR=/tmp/doctr_cache
 
 COPY --from=builder /var/lang/lib/python3.13/site-packages/. /var/lang/lib/python3.13/site-packages/
 COPY --from=builder /opt/doctr_cache /opt/doctr_cache
+# Models copied from /opt/doctr_cache to /tmp/doctr_cache at cold start by handler (writable /tmp/)
 COPY handler.py ${LAMBDA_TASK_ROOT}/handler.py
 
 CMD ["handler.lambda_handler"]
@@ -511,11 +512,12 @@ CMD ["handler.lambda_handler"]
 
 Lazy model loading + lazy imports: heavy frameworks (torch, docTR) imported at function call time, not module level. INIT phase loads only stdlib + boto3 → completes in ~5.5s (under 10s Lambda init limit).
 
+Errors throw exceptions (no `try/except` wrappers, no status code returns) — Lambda reports `FunctionError` with stack trace in CloudWatch. The handler is a pure extraction function: it does NOT write to DynamoDB.
+
 ```python
 import json
 import os
 import time
-from datetime import datetime
 from pathlib import Path
 
 import boto3
@@ -531,6 +533,10 @@ _model = None
 def get_model():
     global _model
     if _model is None:
+        import shutil
+        if not os.path.exists(DOCTR_CACHE_DIR):
+            if os.path.exists("/opt/doctr_cache"):
+                shutil.copytree("/opt/doctr_cache", DOCTR_CACHE_DIR)
         from doctr.models import ocr_predictor
         _model = ocr_predictor(
             det_arch="db_mobilenet_v3_large",
@@ -546,65 +552,34 @@ def get_model():
 
 
 s3 = boto3.client("s3")
-dynamo = boto3.client("dynamodb")
 
 DOCTR_CACHE_DIR = os.getenv("DOCTR_CACHE_DIR", "/tmp/doctr_cache")
-DOCUMENTS_TABLE = os.getenv("DOCUMENTS_TABLE_NAME", "DocumentsTable")
 DOCUMENTS_BUCKET = os.getenv("DOCUMENTS_BUCKET_NAME", "")
 
 
 def lambda_handler(event, context):
-    """
-    Always returns extracted data + metadata. Downstream decides
-    what to do based on status, confidence, and warnings.
-
-    event: { "documentId": "...", "s3Key": "..." }
-    """
-    document_id = event.get("documentId")
-    s3_key = event.get("s3Key")
+    document_id = event["documentId"]
+    s3_key = event["s3Key"]
     bucket = event.get("bucket", DOCUMENTS_BUCKET)
-
-    if not document_id or not s3_key:
-        return {
-            "statusCode": 400,
-            "body": json.dumps({"error": "documentId and s3Key are required"}),
-        }
 
     start = time.time()
     warnings: list[str] = []
 
-    # Download image from S3 to /tmp
     tmp_path = f"/tmp/{Path(s3_key).name}"
-    try:
-        s3.download_file(bucket, s3_key, tmp_path)
-    except Exception as e:
-        return {
-            "statusCode": 500,
-            "body": json.dumps({"error": f"Failed to download from S3: {str(e)}"}),
-        }
+    s3.download_file(bucket, s3_key, tmp_path)
 
-    # Run docTR OCR (lazy import inside handler body)
-    try:
-        from doctr.io import DocumentFile
-        doc = DocumentFile.from_images(tmp_path)
-        result_doc = get_model()(doc)
-        lines = result_doc.render().splitlines()
-        lines = [t.strip() for t in lines if t.strip()]
-    except Exception as e:
-        return {
-            "statusCode": 500,
-            "body": json.dumps({"error": f"OCR failed: {str(e)}"}),
-        }
+    from doctr.io import DocumentFile
+    doc = DocumentFile.from_images(tmp_path)
+    result_doc = get_model()(doc)
+    lines = [t.strip() for t in result_doc.render().splitlines() if t.strip()]
 
     inference_time = time.time() - start
     avg_conf = compute_average_confidence(result_doc)
 
-    # Extract payment fields (always runs, regardless of score)
     fields = extract_all_fields(lines)
     fields.confidence = avg_conf
     fields.inference_time = inference_time
 
-    # Build warnings
     if avg_conf is not None and avg_conf < 0.7:
         warnings.append("low_confidence")
     if fields.score < 4:
@@ -616,8 +591,7 @@ def lambda_handler(event, context):
 
     fields.warnings = warnings
 
-    # Build response dict
-    result = {
+    return {
         "reference": fields.reference,
         "amount": fields.amount,
         "amount_value": fields.amount_value,
@@ -634,24 +608,6 @@ def lambda_handler(event, context):
         "inference_time": fields.inference_time,
         "warnings": fields.warnings,
     }
-
-    # Save doctrResult to DynamoDB
-    table_name = os.environ.get("DOCUMENTS_TABLE_NAME")
-    if table_name:
-        try:
-            dynamo.update_item(
-                TableName=table_name,
-                Key={"documentId": {"S": document_id}},
-                UpdateExpression="SET doctrResult = :result, doctrExtractedAt = :ts",
-                ExpressionAttributeValues={
-                    ":result": {"S": json.dumps(result)},
-                    ":ts": {"S": datetime.utcnow().isoformat()},
-                },
-            )
-        except Exception as e:
-            warnings.append(f"dynamo_save_failed: {str(e)}")
-
-    return result
 ```
 
 ### Lambda config
@@ -664,7 +620,7 @@ def lambda_handler(event, context):
 | Ephemeral storage | 1024 MB | `/tmp` for image download |
 | Architecture | x86_64 | PyTorch compatibility |
 | Env: `DOCTR_MULTIPROCESSING_DISABLE` | `TRUE` | Lambda has no `/dev/shm` |
-| Env: `DOCTR_CACHE_DIR` | `/opt/doctr_cache` | Baked into image at build time |
+| Env: `DOCTR_CACHE_DIR` | `/tmp/doctr_cache` | Models copied from `/opt/doctr_cache` at cold start by handler |
 | Model weights | Pre-downloaded at Docker build time via `download_models.py` | Zero network fetch on cold start |
 | Init phase | ~5.5s (no timeout), loads only stdlib + boto3 | Lazy imports avoid torch/doctr in INIT |
 
@@ -684,7 +640,7 @@ export const doctrFunction = new sst.aws.Function("DoctrFunction", {
 		DOCUMENTS_BUCKET_NAME: documentsBucket.name,
 		DOCUMENTS_TABLE_NAME: documentsTable.name,
 		DOCTR_MULTIPROCESSING_DISABLE: "TRUE",
-		DOCTR_CACHE_DIR: "/opt/doctr_cache",
+		DOCTR_CACHE_DIR: "/tmp/doctr_cache",
 	},
 });
 
@@ -743,9 +699,26 @@ ocr_predictor(
 )
 ```
 
-Runtime `ENV DOCTR_CACHE_DIR=/opt/doctr_cache` points to the same location. First invocation calls `get_model()` which loads from disk cache — no network fetches.
+Runtime `ENV DOCTR_CACHE_DIR=/tmp/doctr_cache` points to `/tmp` (writable). First invocation copies models from `/opt/doctr_cache` to `DOCTR_CACHE_DIR` then loads from disk cache — no network fetches.
 
-**Savings**: Eliminates ~2s network download on every cold start.
+**Permission fix**: `/opt/doctr_cache` is owned by root in the Docker image. The Lambda runtime user (non-root) cannot write to it. Instead of `chmod`, the handler copies baked models to `/tmp/doctr_cache` at cold start — `/tmp/` is always writable by the Lambda user:
+
+```python
+import shutil, os
+DOCTR_CACHE_DIR = os.getenv("DOCTR_CACHE_DIR", "/tmp/doctr_cache")
+
+def get_model():
+    global _model
+    if _model is None:
+        if not os.path.exists(DOCTR_CACHE_DIR):
+            if os.path.exists("/opt/doctr_cache"):
+                shutil.copytree("/opt/doctr_cache", DOCTR_CACHE_DIR)
+        from doctr.models import ocr_predictor
+        _model = ocr_predictor(...)
+    return _model
+```
+
+**Tradeoff**: Adds ~50-100ms `copytree` on every cold start (local filesystem, ~25 MB of model weights). Warm invocations unaffected.
 
 ### Optimization 4: Image size reduction
 

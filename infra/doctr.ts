@@ -11,6 +11,6 @@ export const doctrFunction = new sst.aws.Function("DoctrFunction", {
 		DOCUMENTS_BUCKET_NAME: documentsBucket.name,
 		DOCUMENTS_TABLE_NAME: documentsTable.name,
 		DOCTR_MULTIPROCESSING_DISABLE: "TRUE",
-		DOCTR_CACHE_DIR: "/opt/doctr_cache",
+		DOCTR_CACHE_DIR: "/tmp/doctr_cache",
 	},
 });

@@ -225,7 +225,7 @@ export async function saveDoctrResult(
 	documentId: string,
 	result: DoctrResult,
 ) {
-  const response = await dynamo.send(
+  await dynamo.send(
 		new UpdateCommand({
 			TableName: Resource.DocumentsTable.name,
 			Key: { documentId },
@@ -238,8 +238,6 @@ export async function saveDoctrResult(
 			},
 		}),
 	);
-
-  console.log(response);
 }
 
 export async function getPresignedUrl(s3Key: string) {
