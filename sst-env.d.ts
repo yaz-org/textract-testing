@@ -6,6 +6,10 @@
 
 declare module "sst" {
   export interface Resource {
+    "DoctrFunction": {
+      "name": string
+      "type": "sst.aws.Function"
+    }
     "Documents": {
       "name": string
       "type": "sst.aws.Bucket"

@@ -10,13 +10,13 @@ export default $config({
     };
   },
   async run() {
-    const storage = await import("./infra/storage");
-    const web = await import("./infra/web");
+    const infra = await import("./infra");
 
     return {
-      BucketName: storage.documentsBucket.name,
-      DocumentsTableName: storage.documentsTable.name,
-      WebUrl: web.web.url,
+      BucketName: infra.documentsBucket.name,
+      DocumentsTableName: infra.documentsTable.name,
+      DoctrFunctionName: infra.doctrFunction.name,
+      WebUrl: infra.web.url,
     };
   },
 });

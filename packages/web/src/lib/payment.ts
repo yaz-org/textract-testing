@@ -17,3 +17,21 @@ export type PagoMovilPayment = {
 	destinationBank?: string;
 	concept?: string;
 };
+
+export type DoctrResult = {
+	reference: string;
+	amount: string;
+	amount_value: number;
+	date: string;
+	destination_phone: string | null;
+	destination_cedula: string | null;
+	destination_bank: string | null;
+	origin_phone: string | null;
+	origin_bank: string | null;
+	concept: string | null;
+	score: number;
+	status: "VALID" | "INVALID";
+	confidence: number | null;
+	inference_time: number;
+	warnings: string[];
+};

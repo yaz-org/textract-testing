@@ -24,7 +24,7 @@ import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { ZipArchive } from "archiver";
 import { Resource } from "sst";
 import { z } from "zod";
-import type { PagoMovilPayment } from "./payment";
+import type { DoctrResult, PagoMovilPayment } from "./payment";
 import type { TextractResult } from "./textract";
 
 const s3 = new S3Client({});
@@ -79,6 +79,8 @@ export type DocumentRecord = {
 	textractResult?: TextractResult;
 	textractExtractedAt?: string;
 	paymentResult?: PagoMovilPayment;
+	doctrResult?: DoctrResult;
+	doctrExtractedAt?: string;
 };
 
 export async function createUploadUrl(
@@ -217,6 +219,27 @@ export async function saveTextractResult(
 			},
 		}),
 	);
+}
+
+export async function saveDoctrResult(
+	documentId: string,
+	result: DoctrResult,
+) {
+  const response = await dynamo.send(
+		new UpdateCommand({
+			TableName: Resource.DocumentsTable.name,
+			Key: { documentId },
+			UpdateExpression:
+				"SET doctrResult = :result, doctrExtractedAt = :ts",
+			ConditionExpression: "attribute_exists(documentId)",
+			ExpressionAttributeValues: {
+				":result": result,
+				":ts": new Date().toISOString(),
+			},
+		}),
+	);
+
+  console.log(response);
 }
 
 export async function getPresignedUrl(s3Key: string) {

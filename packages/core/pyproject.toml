@@ -1,0 +1,5 @@
+[project]
+name = "core-extractor"
+version = "0.1.0"
+description = "Payment receipt field extraction from OCR text lines"
+requires-python = ">=3.11"

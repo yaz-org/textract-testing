@@ -1,13 +1,14 @@
 [project]
-name = "doctr-validate"
+name = "doctr-lambda"
 version = "0.1.0"
+description = "docTR OCR Lambda for payment receipt extraction"
 requires-python = ">=3.11"
 dependencies = [
     "core-extractor",
     "python-doctr>=1.0",
     "torch",
+    "boto3",
     "pillow",
-    "rich",
 ]
 
 [tool.uv.sources]

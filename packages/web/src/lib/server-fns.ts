@@ -1,5 +1,7 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
+import { InvokeCommand, LambdaClient } from "@aws-sdk/client-lambda";
+import { Resource } from "sst";
 import type { UploadUrlResult } from "./documents";
 import {
 	createUploadUrls,
@@ -11,12 +13,16 @@ import {
 	getPresignedUrl,
 	listDocuments,
 	saveDocumentRecord,
+	saveDoctrResult,
 	savePaymentResult,
 	saveTextractResult,
 	uploadRequestSchema,
 } from "./documents";
 import { extractPagoMovil } from "./payment-extractor";
 import { analyzeDocument } from "./textract";
+import type { DoctrResult} from "#/lib/payment";
+
+const lambda = new LambdaClient({});
 
 export const CONCURRENCY_MAX = 10;
 
@@ -74,17 +80,68 @@ export const processDocument = createServerFn({ method: "POST" })
 		return results;
 	});
 
+export const processWithDoctr = createServerFn({ method: "POST" })
+	.validator(
+		z.array(z.object({ documentId: z.string().uuid(), s3Key: z.string() })),
+	)
+	.handler(async ({ data }) => {
+		const results: { documentId: string; success: true }[] = [];
+		for (let i = 0; i < data.length; i += CONCURRENCY_MAX) {
+			const batch = data.slice(i, i + CONCURRENCY_MAX);
+			const batchResults = await Promise.all(
+				batch.map(async ({ documentId, s3Key }) => {
+          await docTrProcess(documentId, s3Key);
+					return { documentId, success: true as const };
+				}),
+			);
+			results.push(...batchResults);
+		}
+		return results;
+	});
+
+async function docTrProcess(documentId: string, s3Key: string) {
+  const command = new InvokeCommand({
+    FunctionName: Resource.DoctrFunction.name,
+    Payload: JSON.stringify({
+      documentId,
+      s3Key,
+      bucket: Resource.Documents.name,
+    }),
+  });
+  const response = await lambda.send(command);
+  const payload = JSON.parse(
+      new TextDecoder().decode(response.Payload),
+  );
+  if (response.FunctionError) {
+    console.log("Error", response.FunctionError, payload)
+    throw new Error(
+        `DoctrFunction error: ${JSON.stringify(payload)}`,
+    );
+  }
+
+  const result = payload as DoctrResult;
+  console.log("Success", result)
+  await saveDoctrResult(documentId, result);
+  return result;
+}
+
 export const reprocessPayment = createServerFn({ method: "POST" })
 	.validator(z.object({ documentId: z.string().uuid() }))
 	.handler(async ({ data }) => {
 		const doc = await getDocument(data.documentId);
-		if (!doc?.textractResult) {
-			throw new Error(
-				"No textract result found — run full processing first.",
-			);
-		}
-		const paymentResult = extractPagoMovil(doc.textractResult);
-		await savePaymentResult(data.documentId, paymentResult);
+    if (!doc) {
+      	throw new Error(
+      		"No document found",
+      	);
+    }
+		// if (!doc?.textractResult) {
+		// 	throw new Error(
+		// 		"No textract result found — run full processing first.",
+		// 	);
+		// }
+		// const paymentResult = extractPagoMovil(doc.textractResult);
+		// await savePaymentResult(data.documentId, paymentResult);
+    const paymentResult = await docTrProcess(doc.documentId, doc.s3Key);
 		return paymentResult;
 	});
 

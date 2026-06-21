@@ -17,6 +17,7 @@ import {
 } from "#/components/ui/table.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { formatBytes, formatDate } from "#/lib/format";
+import { toast } from "sonner";
 import { reprocessPayment } from "#/lib/server-fns";
 import type { DocumentRow } from "./columns";
 
@@ -72,12 +73,16 @@ export function PreviewDialog({
 	const queryClient = useQueryClient();
 
 	const reprocessMutation = useMutation({
-		mutationFn: async (documentId: string) => {
-			await reprocessPayment({ data: { documentId } });
-		},
+		mutationFn: (input: { documentId: string }) => reprocessPayment({ data: input }),
+    onSuccess: async (res) => {
+      console.log("onSuccess",res);
+    },
 		onSettled: async () => {
 			await queryClient.invalidateQueries({ queryKey: ["documents"] });
 		},
+    onError: (error) => {
+      toast.error(error instanceof Error ? error.message : "Reprocessing failed.");
+    }
 	});
 
 	return (
@@ -128,9 +133,7 @@ export function PreviewDialog({
 									variant="outline"
 									size="sm"
 									className="w-full gap-1.5"
-									onClick={() =>
-										reprocessMutation.mutate(previewDocument.documentId)
-									}
+									onClick={() => reprocessMutation.mutate({ documentId: previewDocument.documentId}) }
 									disabled={reprocessMutation.isPending}
 								>
 									{reprocessMutation.isPending ? (
