@@ -20,9 +20,10 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from multiprocessing import cpu_count
 from pathlib import Path
 from typing import Any
@@ -109,8 +110,9 @@ def normalize_text(text: str) -> str:
 VZLA_PHONE = re.compile(r"0(412|414|416|424|426)[\s-]?\d{7}")
 MASKED_PHONE = re.compile(r"0\d{1,3}\*[*\s-]*\d{0,4}")
 LOOSE_PHONE = re.compile(
-    r"0(?:412|414|416|424|426)[\s.-]*\d[\s.-]*\d[\s.-]*\d[\s.-]*\d[\s.-]*\d[\s.-]*\d[\s.-]*\d"
+    r"0(?:412|414|416|424|426)[\s.,/-]*\d[\s.,/-]*\d[\s.,/-]*\d[\s.,/-]*\d[\s.,/-]*\d[\s.,/-]*\d[\s.,/-]*\d"
 )
+INTL_PHONE = re.compile(r"5841[246]\d{7}")
 CEDULA_PREFIXED = re.compile(r"[VEJG]\s*[-]?\s*\d{5,10}", re.IGNORECASE)
 VZLA_AMOUNT = re.compile(r"(?:Bs?\.?\s*)?((?:\d{1,3}\.\d{3}[,]\d{2})|\d{3,}[,]\d{2})(?:\s*Bs)?", re.IGNORECASE)
 EMBEDDED_AMOUNT = re.compile(
@@ -191,6 +193,16 @@ def extract_phone_loose(text: str) -> str | None:
         raw = m.group(0)
         digits = re.sub(r"[^\d]", "", raw)
         return f"{digits[:4]}-{digits[4:]}"
+    return None
+
+
+def extract_phone_digits_only(text: str) -> str | None:
+    """Strip all non-digits, then look for 04xx + 6-8 digits (handles OCR splitting a digit as punctuation)."""
+    digits = re.sub(r"[^\d]", "", text)
+    m = re.search(r"(0(?:412|414|416|424|426))(\d{6,8})", digits)
+    if m:
+        raw = m.group(1) + m.group(2)
+        return f"{raw[:4]}-{raw[4:]}"
     return None
 
 
@@ -275,7 +287,7 @@ def strip_bank_code(text: str) -> str:
 REF_LABELS = [
     "referencia", "nro. de referencia", "nro referencia",
     "numero de referencia", "número de referencia", "ref.",
-    "operacion", "operación", "comprobante",
+    "operacion", "operación", "comprobante", "nro", "n°",
 ]
 
 AMOUNT_LABELS = [
@@ -394,6 +406,9 @@ class ExtractionResult:
     origin_phone: str | None = None
     origin_bank: str | None = None
     concept: str | None = None
+    confidence: float | None = None
+    inference_time: float = 0.0
+    warnings: list[str] = field(default_factory=list)
 
 
 def extract_all_fields(lines: list[str]) -> ExtractionResult:
@@ -448,10 +463,6 @@ def extract_all_fields(lines: list[str]) -> ExtractionResult:
             if parsed:
                 result.date = parsed
                 break
-    if not result.date:
-        from datetime import datetime
-
-        result.date = datetime.now().strftime("%Y-%m-%d")
 
     # Destination phone
     dest_phone = find_value_near_label(lines, DEST_PHONE_LABELS, VZLA_PHONE)
@@ -526,6 +537,8 @@ def extract_all_fields(lines: list[str]) -> ExtractionResult:
                 dest_phone = extract_phone(compound)
                 if not dest_phone:
                     dest_phone = extract_phone_loose(compound)
+                if not dest_phone:
+                    dest_phone = extract_phone_digits_only(compound)
                 result.destination_phone = dest_phone
             if not dest_cedula:
                 dest_cedula = extract_cedula(compound)
@@ -544,7 +557,7 @@ def extract_all_fields(lines: list[str]) -> ExtractionResult:
     # General phone fallback: if a phone exists in the full text but wasn't labeled
     if not result.destination_phone:
         all_text = " ".join(lines)
-        if VZLA_PHONE.search(all_text) or MASKED_PHONE.search(all_text) or LOOSE_PHONE.search(all_text):
+        if VZLA_PHONE.search(all_text) or MASKED_PHONE.search(all_text) or LOOSE_PHONE.search(all_text) or INTL_PHONE.search(all_text) or extract_phone_digits_only(all_text):
             for line in lines:
                 phone = extract_phone(line)
                 if phone:
@@ -553,6 +566,19 @@ def extract_all_fields(lines: list[str]) -> ExtractionResult:
             if not result.destination_phone:
                 for line in lines:
                     phone = extract_phone_loose(line)
+                    if phone:
+                        result.destination_phone = phone
+                        break
+            if not result.destination_phone:
+                for line in lines:
+                    m = INTL_PHONE.search(line)
+                    if m:
+                        result.destination_phone = "0" + m.group(0)[2:]
+                        break
+            if not result.destination_phone:
+                # Last resort: strip all non-digits and look for 10-12 digit runs (fixes OCR digit-splitting)
+                for line in lines:
+                    phone = extract_phone_digits_only(line)
                     if phone:
                         result.destination_phone = phone
                         break
@@ -687,6 +713,12 @@ def process_batch(batch: list[Path]) -> list[dict]:
             text_lines = [t.strip() for t in text_lines if t.strip()]
             extraction = extract_all_fields(text_lines)
             avg_conf = compute_average_confidence(result_doc)
+            extraction.confidence = avg_conf
+            extraction.inference_time = elapsed
+            if avg_conf is not None and avg_conf < 0.7:
+                extraction.warnings.append("low_confidence")
+            if extraction.score < SCORE_THRESHOLD:
+                extraction.warnings.append("low_score")
             entry.update({
                 "elapsed": elapsed,
                 "extraction": extraction,
@@ -774,6 +806,12 @@ def main():
                 text_lines = [t.strip() for t in text_lines if t.strip()]
                 extraction = extract_all_fields(text_lines)
                 avg_conf = compute_average_confidence(result_doc)
+                extraction.confidence = avg_conf
+                extraction.inference_time = elapsed
+                if avg_conf is not None and avg_conf < 0.7:
+                    extraction.warnings.append("low_confidence")
+                if extraction.score < SCORE_THRESHOLD:
+                    extraction.warnings.append("low_score")
                 entry.update({
                     "elapsed": elapsed,
                     "extraction": extraction,
@@ -890,6 +928,26 @@ def main():
         console.print(f"  [yellow]Issues flagged ({len(issues)}):[/yellow]")
         for issue in issues:
             console.print(f"    • {issue}")
+
+    # -----------------------------------------------------------------------
+    # Copy flawed images (score < 4) to exports/flawed for human review
+    # -----------------------------------------------------------------------
+    flawed_dir = IMAGES_DIR.parent / "flawed"
+    if flawed_dir.exists():
+        shutil.rmtree(flawed_dir)
+    flawed_dir.mkdir(parents=True, exist_ok=True)
+    flawed_count = 0
+    for data in all_results:
+        if "error" in data:
+            continue
+        extraction = data["extraction"]
+        if extraction.score < SCORE_THRESHOLD:
+            src = IMAGES_DIR / data["path"]
+            dest = flawed_dir / src.name
+            shutil.copy2(src, dest)
+            flawed_count += 1
+    if flawed_count > 0:
+        console.print(f"  Copied {flawed_count} low-scoring images to [cyan]{flawed_dir}[/cyan] for review")
 
     console.print()
     console.rule()

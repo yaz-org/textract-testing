@@ -7,43 +7,51 @@
 - **Script**: `packages/scripts/validate_doctr.py` (UV-managed Python 3.11)
 - **Dependencies**: `python-doctr==1.0.1`, CPU-only PyTorch 2.12.1, Pillow, Rich
 - **Run**: `cd packages/scripts && uv run validate_doctr.py`
+- **Sequential**: `MAX_WORKERS=0 uv run validate_doctr.py` (default, per-image progress)
 - **Parallel**: `MAX_WORKERS=4 uv run validate_doctr.py` (4 workers × 4 threads, ~2 min)
-- **Images**: 366 JPG files in `exports/dream-team-images/` (~25MB total)
+- **Images**: variable — typically 280-401 JPG files in `exports/dream-team-images/` (~25MB total)
+- **Flawed output**: low-scoring images (score < 4) auto-copied to `exports/flawed/` for human review
 
-### Results (full 366-image run)
+### Results (full run, numbers vary with dataset)
 
 | Metric | Value |
 |---|---|
-| Valid receipts (score >= 4) | **260/366 (71%)** |
-| Non-receipts correctly filtered | 106 (29%) — score < 4 |
+| Valid receipts (score >= 4) | ~70% of images |
+| Non-receipts correctly filtered | ~30% — score < 4, auto-copied to `exports/flawed/` |
 | Average inference (4 workers × 4 threads) | 1.3s per image |
-| Total wall time (4 workers) | **127s (2 min)** |
-| Average word confidence | 85% |
-| Field: Reference found (valid receipts) | 259/260 (100%) |
-| Field: Amount found (valid receipts) | 252/260 (97%) |
-| Field: Date found (valid receipts) | 260/260 (100%) |
-| Field: Phone found (valid receipts) | 252/260 (97%) |
-| Field: Bank found (valid receipts) | 260/260 (100%) |
-| Field: Cedula found (valid receipts) | 204/260 (78%) |
+| Total wall time (4 workers) | **~127s (~2 min)** |
+| Average word confidence | 85-89% |
+| Field: Reference found (valid receipts) | ~100% |
+| Field: Amount found (valid receipts) | ~97% |
+| Field: Date found (valid receipts) | varies by bank layout (BNC receipts have no date) |
+| Field: Phone found (valid receipts) | ~99% (after regex improvements) |
+| Field: Bank found (valid receipts) | ~100% |
+| Field: Cedula found (valid receipts) | ~78% |
 
 ### Extraction fixes applied
 
 | Fix | What changed | Impact |
 |---|---|---|
 | Reference: phone exclusion | Skip 04-prefixed 11-digit numbers in reference fallback | Prevents phone masquerading as reference |
+| Reference: "nro"/"n°" labels | Added `"nro"`, `"n°"` to `REF_LABELS` for "No XXXXXX" format (Tpago Mercantil) | Catches references labeled as "Nro."/"N°" |
 | Phone: loose regex | `LOOSE_PHONE` handles separators anywhere (e.g., `0414-329-7358`) | Catches phones with dashes/dots between digits |
+| Phone: separator expansion | `LOOSE_PHONE` expanded from `[\s.-]*` to `[\s.,/-]*` (comma and slash added) | Handles OCR corruption where comma/slash replaces separator |
+| Phone: international regex | `INTL_PHONE` (`5841[246]\d{7}`) for international Venezuelan format | Catches `584143297358` → converts to `0414-3297358` |
+| Phone: digits-only fallback | `extract_phone_digits_only()` strips all non-digits, matches 6-8 digit suffix | Fixes OCR rendering `/` as a digit separator (e.g., `0414/3297358`) |
 | Amount: sort by value | Pick highest amount across all lines (prefers thousands-separator) | Fixes "533,00" → "3.533,00" multi-line case |
 | Bank: all-lines scan | Check every line for bank name after labeled search falls short | Bank 89% → 100% among valid receipts |
 | Cedula: all-lines scan | Scan all lines for V/E/J/G-prefixed IDs | Cedula 73% → 78% among valid receipts |
 | Cedula: case-insensitive | `CEDULA_PREFIXED` regex gets `re.IGNORECASE` for lowercase "v-" | Catches OCR output like "v-12345678" |
+| Date: no fallback | Removed fallback to `datetime.now()` when date not found in receipt | Prevents wrong dates on BNC receipts that don't render a transfer date |
 
 ### Key Observations
 
-1. **docTR OCR quality is good** — 85% average confidence on all detected text. Works well on Banplus, BNC, Banesco, and Mercantil receipt layouts.
-2. **Non-receipt images correctly filtered** — ~106 images (chat screenshots, thumbnails, other banking UIs) scored < 4 and are correctly excluded.
-3. **Reference/cedula gaps were extraction logic issues, not OCR** — The OCR captures text correctly, but parser missed layout-specific field positions. Regex-based fixes brought reference to 100%, cedula to 78%.
-4. **Average inference 0.8s (warm, sequential)** / **1.3s (4 workers)** — well within Lambda timeout tolerance.
-5. **Model config works** — `assume_straight_pages=True`, orientation disabled, `preserve_aspect_ratio=True` all correct for phone screenshots.
+1. **docTR OCR quality is good** — 85-89% average confidence on all detected text. Works well on Banplus, BNC, Banesco, and Mercantil receipt layouts.
+2. **Non-receipt images correctly filtered** — ~30% of images (chat screenshots, thumbnails, other banking UIs) scored < 4 and auto-copied to `exports/flawed/`.
+3. **Phone gaps root-caused** — 8 images initially missing phone detection. 6 fixed via regex improvements (INTL_PHONE, extract_phone_digits_only, LOOSE_PHONE separator expansion). 2 accepted as unfixable (BDV layout doesn't render phone, OCR letter confusion).
+4. **BNC receipts have layout quirks** — Monto/Comision/Total sections (commission won't be confused with amount since "Monto:" appears first in labeled search). Some BNC receipts don't display a transfer date.
+5. **Average inference 0.8s (warm, sequential)** / **1.3s (4 workers)** — well within Lambda timeout tolerance.
+6. **Model config works** — `assume_straight_pages=True`, orientation disabled, `preserve_aspect_ratio=True` all correct for phone screenshots.
 
 ### Raw OCR Samples (correctly captured)
 
@@ -146,9 +154,12 @@ from rich.table import Table
 import re, time
 ```
 
-Constants:
-- `IMAGES_DIR = Path("../exports/dream-team-images")`
-- `SAMPLE_SIZE = 10`
+Constants (all overridable via env vars):
+- `IMAGES_DIR` — from `IMAGES_DIR` env or `../../exports/dream-team-images` relative to script
+- `SAMPLE_SIZE` — from `SAMPLE_SIZE` env, default 0 (process all images)
+- `SCORE_THRESHOLD` — minimum score for valid receipt, default 4
+- `DOCTR_NUM_THREADS` — PyTorch CPU thread limit, default 0 (no cap)
+- `MAX_WORKERS` — parallel worker processes, default 0 (sequential)
 - Model arch: `db_mobilenet_v3_large` + `crnn_mobilenet_v3_small`
 
 #### 2. Venezuelan bank list (ported from `packages/web/src/lib/banks.ts`)
@@ -173,35 +184,45 @@ Includes: BDV, Venezolano de Crédito, Mercantil, BBVA Provincial, Bancaribe, Ba
 
 ```python
 def normalize_text(text: str) -> str:
-    return (
-        text.lower()
-        .replace("á", "a").replace("à", "a").replace("ä", "a").replace("â", "a")
-        .replace("é", "e").replace("è", "e").replace("ë", "e").replace("ê", "e")
-        .replace("í", "i").replace("ì", "i").replace("ï", "i").replace("î", "i")
-        .replace("ó", "o").replace("ò", "o").replace("ö", "o").replace("ô", "o")
-        .replace("ú", "u").replace("ù", "u").replace("ü", "u").replace("û", "u")
-        .replace("ñ", "n")
-        .replace(r"\s+", " ").strip()
-    )
+    text = text.lower()
+    for accented, plain in _ACCENT_MAP.items():
+        text = text.replace(accented, plain)
+    text = re.sub(r"\s+", " ", text)
+    return text.strip()
 ```
+Uses a `_ACCENT_MAP` dict for accent-to-plain character mapping, and `re.sub` (not `str.replace`) for whitespace collapse.
 
 #### 4. Field extractors (ported from `payment-extractor.ts`)
 
-Each function takes `lines: list[str]` and returns `str | None`.
+All extraction logic lives in a single `extract_all_fields(lines)` function (~200 lines) that returns an `ExtractionResult` dataclass. It does NOT use standalone `extract_reference()`/`extract_amount()` functions — extraction happens inline with labeled search + multi-pass fallbacks.
 
-**`extract_reference()`**: Matches `\d{6,15}` near labels like "referencia", "nro. de referencia", "operacion", "comprobante".
+**Helper functions used by the extractor:**
 
-**`extract_amount()`**: Matches Venezuelan currency format `Bs. X.XXX,XX` or `X.XXX,XX`. Uses regex `(?:Bs?\.?\s*)?([\d.]+[,]\d{2})(?:\s*Bs)?` and embedded pattern `Realizaste\s+(?:un\s+)?(?:Pago\s+Móvil|transacción)\s+de\s+Bs\.?\s*([\d.]+[,]\d{2})`. Returns both `{text, value}` where value is the numeric float.
+| Function | Purpose |
+|---|---|
+| `fuzzy_match_label(text, labels)` | Checks if `text` matches any label string (exact or word-order tolerant) |
+| `find_value_near_label(lines, labels, pattern?, max_distance)` | Scans lines for a label, then returns the matching value pattern within `max_distance` lines |
+| `extract_phone(text)` | Matches `VZLA_PHONE` (`0(412\|414\|416\|424\|426)[\\s-]?\\d{7}`) or `MASKED_PHONE` (`0\\d{1,3}\\*[*\\s-]*\\d{0,4}`) |
+| `extract_phone_loose(text)` | Uses `LOOSE_PHONE` with `[\\s.,/-]*` separators (handles OCR comma/slash corruption) |
+| `extract_phone_digits_only(text)` | Strips all non-digits, matches `04xx` + 6-8 trailing digits (fixes OCR digit splitting) |
+| `extract_amount_value(text)` | Matches `1.234,56` thousands-separator format, or `123456,78` compact format |
+| `parse_vzla_date(text)` | Matches `dd/mm/yyyy` pattern, normalizes 2-digit years to 2000+, extracts optional time |
+| `extract_cedula(text)` | Matches `[VEJG]\\s*[-]?\\s*\\d{5,10}`, normalizes to `V-12345678` format (case-insensitive) |
+| `match_bank(text)` | Normalizes text, matches against bank shortName/fullName/acronym/alternativeNames/bankCode |
 
-**`extract_date()`**: Matches `\d{1,2}/\d{1,2}/\d{2,4}`. Also extracts optional time via `\d{1,2}:\d{2}(?::\d{2})?\s*(AM|PM|am|pm)?`. Normalizes 2-digit years to 2000+.
+**Extraction flow for each field:**
 
-**`extract_phone()`**: Matches Venezuelan phone patterns: `0(412|414|416|424|426)[\s-]?\d{7}` and masked `0\d{1,3}\*[*\s-]*\d{0,4}`.
-
-**`extract_cedula()`**: Matches `[VEJG]\s*[-]?\s*\d{5,10}` and normalizes to `V-12345678` format.
-
-**`match_bank()`**: Normalizes all text and checks if any bank's `shortName`, `fullName`, `acronym`, `alternativeNames`, or `bankCode` appears in the text. Returns `shortName`.
-
-**`extract_all_fields(lines)`**: Runs all extractors, returns `dict` with keys: `reference`, `amount`, `amount_value`, `date`, `phone`, `cedula`, `bank`, `lines_count`.
+| Field | Primary | Fallback 1 | Fallback 2+ |
+|---|---|---|---|
+| Reference | `find_value_near_label(lines, REF_LABELS, \\d{6,15})` | Scan all lines for 8-15 digit numbers (skip phone) | — |
+| Amount | `find_value_near_label(lines, AMOUNT_LABELS, VZLA_AMOUNT)` | Scan all lines, pick highest `extract_amount_value` | — |
+| Date | `find_value_near_label(lines, DATE_LABELS, DATE_PATTERN)` | Scan all lines for `parse_vzla_date` | (no today fallback) |
+| Dest Phone | `find_value_near_label(lines, DEST_PHONE_LABELS, VZLA_PHONE)` (×2: VZLA then MASKED) | Inline phone on label line | Compound beneficiary → loose → intl → digits-only → general full-text scan |
+| Dest Cedula | `find_value_near_label(lines, DEST_CEDULA_LABELS, CEDULA_PREFIXED)` (×4 layers) | Inline on label line | "identificación" label → ID keywords → bare V/E/J/G in all lines |
+| Dest Bank | `find_value_near_label(lines, DEST_BANK_LABELS)` → strip bank code → match | All-lines scan every line for bank name | Compound beneficiary fallback |
+| Origin Phone | `find_value_near_label(lines, ORIGIN_PHONE_LABELS, VZLA_PHONE)` | MASKED_PHONE attempt | Raw value attempt |
+| Origin Bank | `find_value_near_label(lines, ORIGIN_BANK_LABELS)` → strip bank code → match | — | — |
+| Concept | `find_value_near_label(lines, CONCEPT_LABELS)` | — | — |
 
 #### 5. Receipt scorer (ported from `payment-extractor.ts:191-251`)
 
@@ -241,27 +262,57 @@ Optimizations:
 - `disable_crop_orientation=True` — skips per-crop orientation, saves ~10% inference time
 - `preserve_aspect_ratio=True` — keeps phone screenshot proportions (typically ~591x1280 or ~498x1080)
 
-#### 7. Image sampling
+#### 7. Image loading
 
-Pick `SAMPLE_SIZE` (10) images evenly distributed by file size:
+All `*.jpg`, `*.jpeg`, `*.png` files from `IMAGES_DIR` are processed. Default behavior is to process ALL images (`SAMPLE_SIZE=0`). To process a subset, set `SAMPLE_SIZE=N` — takes the first N images alphabetically:
+
 ```python
-all_images = sorted(IMAGES_DIR.glob("*.jpg"), key=lambda p: p.stat().st_size)
-step = max(1, len(all_images) // SAMPLE_SIZE)
-samples = all_images[::step][:SAMPLE_SIZE]
+all_images: list[Path] = []
+for ext in ("*.jpg", "*.jpeg", "*.png"):
+    all_images.extend(sorted(images_dir.glob(ext)))
+if SAMPLE_SIZE > 0 and SAMPLE_SIZE < len(all_images):
+    processed_images = all_images[:SAMPLE_SIZE]
 ```
 
-Rationale: Different bank apps produce different-sized screenshots. Even file-size sampling increases the chance of covering different app UIs/layouts.
+#### 8. Processing loop (two modes)
 
-#### 8. Processing loop
+**Sequential mode** (`MAX_WORKERS=0`, default):
+1. `load_model()` — loads docTR predictor with warmup (dummy 100×100 JPEG to trigger JIT compilation)
+2. For each image: load → OCR → render → extract → compute confidence → collect
 
-For each sampled image:
-1. Load: `doc = DocumentFile.from_images(str(img_path))`
-2. Time and run: `start = time.time(); result = model(doc); elapsed = time.time() - start`
-3. Render text: `lines = result.render().splitlines()`
-4. Extract fields: `fields = extract_all_fields(lines)`
-5. Compute average confidence from `result.pages[0]` blocks/words
-6. Compute receipt score: `score = score_receipt(lines)`
-7. Collect into results list
+**Parallel mode** (`MAX_WORKERS=N`):
+1. Split images into N batches
+2. Spawn `ProcessPoolExecutor` with N workers, each running `process_batch(batch)`
+3. Each worker loads its own model + warmup in the subprocess
+4. Auto-set thread budget: `max(4, 12 // workers)` per worker (unless `DOCTR_NUM_THREADS` explicitly set)
+5. Results collected, sorted by filename
+
+```python
+def process_batch(batch: list[Path]) -> list[dict]:
+    """Process a batch of images in a worker process."""
+    # Load model + warmup in subprocess
+    model = ocr_predictor(...)
+    # ... dummy JPEG warmup ...
+    for img_path in batch:
+        doc = DocumentFile.from_images(str(img_path))
+        result_doc = model(doc)
+        text_lines = result_doc.render().splitlines()
+        extraction = extract_all_fields(text_lines)
+        avg_conf = compute_average_confidence(result_doc)
+    return results
+```
+
+**Model warmup** (runs in both modes before first real inference):
+```python
+from PIL import Image
+from io import BytesIO
+buf = BytesIO()
+Image.new("RGB", (100, 100), "white").save(buf, format="JPEG")
+dummy = DocumentFile.from_images(buf.getvalue())
+model(dummy)  # triggers PyTorch JIT compilation upfront
+```
+
+Without warmup, the first 10-20 images pay a ~2-3s JIT compilation penalty each. Warmup absorbs this at model load time.
 
 #### 9. Report output (Rich table)
 
@@ -284,31 +335,65 @@ Each row shows field values or `--` for missing fields. Time in seconds, confide
 
 After the table, print aggregate stats:
 ```
-Summary
-───────
-  Samples processed  : 10
-  Valid receipts     : 8/10 (score >= 4)
-  Avg score          : 7.2
-  Field detection rate:
-    Reference#  : 9/10 (90%)
-    Amount      : 8/10 (80%)
-    Date        : 10/10 (100%)
-    Phone       : 7/10 (70%)
-    Cedula      : 6/10 (60%)
-    Bank        : 9/10 (90%)
-  ─────────────────────────────────
-  Avg inference time : 2.1s
-  Avg confidence     : 91%
-  Model              : db_mobilenet_v3_large + crnn_mobilenet_v3_small
+  Images processed      : 282
+  Valid receipts        : 282/282 (score >= 4)
+  Average inference     : 1.2s
+  Total wall time      : 87.5s (0.3s avg)
+  Average confidence    : 89%
+
+  Field detection rates:
+    Reference       : 281/282 (100%)
+    Amount          : 274/282 (97%)
+    Date            : 242/282 (86%)
+    Dest Phone      : 280/282 (99%)
+    Dest Bank       : 282/282 (100%)
+    Dest Cedula     : 221/282 (78%)
+
+  Model: db_mobilenet_v3_large + crnn_mobilenet_v3_small
+  Config: assume_straight_pages=True, orientation disabled
+
+  Issues flagged (1):
+    • 1771689547-...: low confidence (63%)
 ```
 
 #### 11. Edge case reporting
 
-Flag any images where:
-- No text detected at all (blank result)
-- Confidence < 70% on any word
-- Score < 4 (likely not a valid pago móvil screenshot)
-- Spanish characters garbled (ñ → n, accents missing)
+Low-confidence images (`avg_conf < 70%`) are flagged as issues in the summary output.
+
+#### 12. Confidence computation
+
+```python
+def compute_average_confidence(result_doc) -> float | None:
+    confidences = []
+    for page in result_doc.pages:
+        for block in page.blocks:
+            for line in block.lines:
+                for word in line.words:
+                    if word.confidence is not None:
+                        confidences.append(word.confidence)
+    if not confidences:
+        return None
+    return sum(confidences) / len(confidences)
+```
+
+Walks the docTR result tree (pages → blocks → lines → words) and averages per-word confidence.
+
+#### 13. Flawed images archive
+
+After the table and summary, low-scoring images (score < 4) are auto-copied to `exports/flawed/` for human review:
+
+```python
+flawed_dir = IMAGES_DIR.parent / "flawed"
+if flawed_dir.exists():
+    shutil.rmtree(flawed_dir)
+flawed_dir.mkdir(parents=True, exist_ok=True)
+for data in all_results:
+    if data["extraction"].score < SCORE_THRESHOLD:
+        src = IMAGES_DIR / data["path"]
+        shutil.copy2(src, flawed_dir / src.name)
+```
+
+Previous contents of `exports/flawed/` are deleted on each run, then re-populated from the current results.
 
 ---
 
@@ -346,7 +431,10 @@ packages/doctr-lambda/
 ```dockerfile
 FROM public.ecr.aws/lambda/python:3.11
 
-RUN pip install python-doctr torch boto3 Pillow --no-cache-dir
+# Use UV for dependency management (matches local validation workflow)
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+COPY pyproject.toml .
+RUN uv pip install --system python-doctr torch boto3 Pillow --no-cache-dir
 
 # Pre-download models during build (avoids cold-start download)
 ENV DOCTR_CACHE_DIR=/tmp/doctr_cache
@@ -359,10 +447,13 @@ CMD ["handler.lambda_handler"]
 
 ### `handler.py`
 
+The Lambda always returns parsed data with metadata. It never refuses to return
+— downstream systems decide what to do based on `status`, `confidence`, and `warnings`.
+
 ```python
-import json
-import boto3
+import json, time, boto3
 from pathlib import Path
+from datetime import datetime
 from doctr.io import DocumentFile
 from doctr.models import ocr_predictor
 
@@ -383,13 +474,30 @@ dynamo = boto3.client('dynamodb')
 
 # Same field extractors as validate_doctr.py (imported or inlined)
 
+def compute_average_confidence(result_doc) -> float | None:
+    confidences = []
+    for page in result_doc.pages:
+        for block in page.blocks:
+            for line in block.lines:
+                for word in line.words:
+                    if word.confidence is not None:
+                        confidences.append(word.confidence)
+    if not confidences:
+        return None
+    return sum(confidences) / len(confidences)
+
 def lambda_handler(event, context):
     """
+    Always returns extracted data + metadata. Downstream decides
+    what to do based on status, confidence, and warnings.
+
     event: { "documentId": "...", "s3Key": "..." }
     """
     document_id = event['documentId']
     s3_key = event['s3Key']
     bucket = event.get('bucket', 'DOCUMENTS_BUCKET_NAME')
+
+    start = time.time()
 
     # Download image from S3 to /tmp
     tmp_path = f'/tmp/{Path(s3_key).name}'
@@ -400,8 +508,23 @@ def lambda_handler(event, context):
     result = model(doc)
     lines = result.render().splitlines()
 
-    # Extract payment fields
+    inference_time = time.time() - start
+    avg_conf = compute_average_confidence(result)
+
+    # Extract payment fields (always runs, regardless of score)
     fields = extract_all_fields(lines)
+    fields.confidence = avg_conf
+    fields.inference_time = inference_time
+
+    # Build warnings
+    if avg_conf is not None and avg_conf < 0.7:
+        fields.warnings.append("low_confidence")
+    if fields.score < 4:
+        fields.warnings.append("low_score")
+    if not fields.date:
+        fields.warnings.append("missing_date")
+    if not fields.amount:
+        fields.warnings.append("missing_amount")
 
     # Save doctrResult to DynamoDB
     dynamo.update_item(
@@ -409,12 +532,12 @@ def lambda_handler(event, context):
         Key={'documentId': {'S': document_id}},
         UpdateExpression='SET doctrResult = :result, doctrExtractedAt = :ts',
         ExpressionAttributeValues={
-            ':result': {'S': json.dumps(fields)},
+            ':result': {'S': json.dumps(fields.__dict__)},
             ':ts': {'S': datetime.utcnow().isoformat()},
         },
     )
 
-    return fields
+    return fields.__dict__
 ```
 
 ### Lambda config
@@ -463,13 +586,17 @@ doctrResult?: {
   amount: string;
   amount_value: number;
   date: string;
-  phone?: string;
-  cedula?: string;
-  bank?: string;
+  destination_phone?: string;
+  destination_cedula?: string;
+  destination_bank?: string;
+  origin_phone?: string;
+  origin_bank?: string;
+  concept?: string;
   score: number;
+  status: string;
   confidence: number;
-  lines_count: number;
   inference_time: number;
+  warnings: string[];
 };
 doctrExtractedAt?: string;
 ```
@@ -517,7 +644,36 @@ Add a "Process with docTR" button next to the existing "Process" button in the d
 │ Score              │ 10                 │ 8               │
 │ Confidence         │ 97%                │ 91%             │
 │ Cost               │ $0.0015 (API)     │ ~$0.0002 (LCU)  │
+│ Warnings           │ --                 │ --              │
 └────────────────────┴────────────────────┴───────────────┘
+```
+
+### Lambda response contract
+
+The Lambda always returns extracted data with metadata. It never short-circuits
+on low score or low confidence — downstream consumers decide the action.
+
+```typescript
+type DoctrResult = {
+  // Extracted fields (empty string / null if not found)
+  reference: string;
+  amount: string;
+  amount_value: number;
+  date: string;
+  destination_phone: string | null;
+  destination_cedula: string | null;
+  destination_bank: string | null;
+  origin_phone: string | null;
+  origin_bank: string | null;
+  concept: string | null;
+
+  // Metadata
+  score: number;                    // 0-13 receipt validity score
+  status: "VALID" | "INVALID";     // VALID if score >= 4
+  confidence: number | null;        // avg word confidence (0.0-1.0)
+  inference_time: number;           // seconds
+  warnings: string[];               // "low_confidence", "low_score", "missing_date", etc.
+};
 ```
 
 ---
