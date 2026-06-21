@@ -456,7 +456,7 @@ No `copyFiles` needed in SST config — SST v4 copies the entire workspace as th
 
 ### `Dockerfile`
 
-Multi-stage build: builder has compile tools + model download, final stage has only runtime libraries. Reduces image size by ~200MB.
+Multi-stage build: builder has compile tools + model download, final stage has only runtime libraries. Reduces image size by ~200MB. A cleanup layer removes torch test dirs (~90 MB) and Python caches.
 
 ```dockerfile
 FROM public.ecr.aws/lambda/python:3.13 AS builder
@@ -476,8 +476,20 @@ RUN uv pip install --system \
 
 ENV DOCTR_CACHE_DIR=/opt/doctr_cache
 ENV DOCTR_MULTIPROCESSING_DISABLE=TRUE
-COPY download_models.py .
+COPY packages/doctr-lambda/download_models.py .
 RUN python download_models.py
+
+# Remove torch test dirs (~90MB), __pycache__, .pyc, uv cache, dnf cache
+RUN find /var/lang/lib/python3.13/site-packages -type d \
+    \( -name test -o -name tests -o -name testing \
+       -o -name benchmark -o -name benchmarks \) \
+    -exec rm -rf {} + 2>/dev/null; \
+    find /var/lang/lib/python3.13/site-packages -type d \
+    -name __pycache__ -exec rm -rf {} + 2>/dev/null; \
+    find /var/lang/lib/python3.13/site-packages \
+    -name '*.pyc' -delete 2>/dev/null; \
+    rm -rf /root/.cache 2>/dev/null; \
+    dnf clean all 2>/dev/null; true
 
 
 FROM public.ecr.aws/lambda/python:3.13
@@ -735,6 +747,40 @@ Runtime `ENV DOCTR_CACHE_DIR=/opt/doctr_cache` points to the same location. Firs
 
 **Savings**: Eliminates ~2s network download on every cold start.
 
+### Optimization 4: Image size reduction
+
+Docker image was reduced from ~708 MB to ~602 MB (15% savings) via a builder-stage cleanup layer:
+
+| Cleanup | Uncompressed saved | Notes |
+|--------|-------------------|-------|
+| Remove `torch/test/` + `torch/testing/` | ~90 MB | Test data/utilities, never loaded at runtime |
+| Remove `__pycache__` + `*.pyc` | ~30 MB | Python recompiles on demand |
+| Remove `uv` build cache (`/root/.cache`) | ~50 MB | Only exists in builder, not copied to final |
+| `dnf clean all` | ~20 MB | Package manager metadata |
+
+PyTorch CPU wheels from `download.pytorch.org/whl/cpu` are already stripped of debug symbols, so `strip --strip-debug` is a no-op.
+
+```dockerfile
+# Cleanup layer in builder stage
+RUN find /var/lang/lib/python3.13/site-packages -type d \
+    \( -name test -o -name tests -o -name testing \
+       -o -name benchmark -o -name benchmarks \) \
+    -exec rm -rf {} + 2>/dev/null; \
+    find /var/lang/lib/python3.13/site-packages -type d \
+    -name __pycache__ -exec rm -rf {} + 2>/dev/null; \
+    find /var/lang/lib/python3.13/site-packages \
+    -name '*.pyc' -delete 2>/dev/null; \
+    rm -rf /root/.cache 2>/dev/null; \
+    dnf clean all 2>/dev/null; true
+```
+
+Cleanup must run in the **builder** stage (where `find` is available). The `COPY --from=builder` to the final stage only copies site-packages, so base image files (pip, setuptools) from the Lambda runtime image are unaffected.
+
+| Metric | Before | After | Savings |
+|--------|--------|-------|---------|
+| Compressed image size | 708 MB | 602 MB | **106 MB (15%)** |
+| Site-packages (uncompressed) | 1.3 GB | 1.1 GB | 200 MB |
+
 ### Performance measurements
 
 | Phase | Time | What's happening |
@@ -902,7 +948,7 @@ FAST models (tiny/small/base) have good accuracy but target rotated/scene text. 
 | Spanish accent characters not recognized | Existing `normalize_text()` already strips accents; payment extraction works on normalized text |
 | Model init timeout | **Mitigated**: Init phase 5.5s, first invoke ~7.5s — well within Lambda 10s init limit. Multi-stage build + lazy imports + pre-downloaded weights. Provisioned Concurrency available if needed |
 | docTR misses form fields that Textract gets | Run both side-by-side; compare results in Phase 2; fall back to Textract for missing fields |
-| Docker image >10GB (Lambda limit) | Multi-stage build saves ~200MB; final image ~800MB. Well under 10GB limit |
+| Docker image >10GB (Lambda limit) | Multi-stage build + cleanup layer: final image ~602 MB compressed. Well under 10GB limit |
 | `MemorySize` constraint error on first deploy after major Dockerfile change | Retry `sst deploy` (transient AWS API issue — resolves on retry) |
 | Bank logo/text in screenshot confuses detection | Detection only finds text, not logos; bank name in text is what we match on |
 | Different bank apps have different layouts | Even sampling by file size in validation covers multiple layouts; regex-based extraction is layout-agnostic |

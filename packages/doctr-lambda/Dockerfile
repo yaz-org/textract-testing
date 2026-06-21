@@ -18,6 +18,13 @@ ENV DOCTR_MULTIPROCESSING_DISABLE=TRUE
 COPY download_models.py .
 RUN python download_models.py
 
+# Remove torch test dirs (~90MB), __pycache__, .pyc, uv cache, dnf cache
+RUN find /var/lang/lib/python3.13/site-packages -type d \( -name test -o -name tests -o -name testing -o -name benchmark -o -name benchmarks \) -exec rm -rf {} + 2>/dev/null; \
+    find /var/lang/lib/python3.13/site-packages -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null; \
+    find /var/lang/lib/python3.13/site-packages -name '*.pyc' -delete 2>/dev/null; \
+    rm -rf /root/.cache 2>/dev/null; \
+    dnf clean all 2>/dev/null; true
+
 
 FROM public.ecr.aws/lambda/python:3.13
 
