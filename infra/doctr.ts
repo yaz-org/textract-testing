@@ -5,7 +5,7 @@ export const doctrFunction = new sst.aws.Function("DoctrFunction", {
 	runtime: "python3.13",
 	python: { container: true },
 	timeout: "60 seconds",
-	memory: "4096 MB",
+	memory: "3008 MB",
 	link: [documentsBucket, documentsTable],
 	environment: {
 		DOCUMENTS_BUCKET_NAME: documentsBucket.name,

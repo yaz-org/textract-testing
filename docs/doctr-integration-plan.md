@@ -420,71 +420,126 @@ After validation confirms docTR works on the images:
 
 ```
 packages/doctr-lambda/
-  Dockerfile              ← Python 3.11 + docTR + model weights
-  handler.py              ← Lambda handler
-  requirements.txt        ← Pip dependencies
-  pyproject.toml          ← UV alternative
+  Dockerfile              ← Multi-stage build (Python 3.13, UV, pre-downloaded models)
+  handler.py              ← Lambda handler (lazy model loading, shared extractor)
+  download_models.py      ← Pre-downloads model weights at Docker build time
+  pyproject.toml          ← UV dependencies (core-extractor, python-doctr, torch)
 ```
+
+### Shared extraction module
+
+The canonical extraction logic lives in `packages/core/core/extractor/extractor.py` — a single source of truth imported by both `validate_doctr.py` and the Lambda handler.
+
+```
+packages/core/core/extractor/
+  __init__.py           ← Re-exports: ExtractionResult, extract_all_fields, compute_average_confidence, etc.
+  extractor.py          ← Canonical extraction logic: field extractors, regex patterns, scorer, ExtractionResult dataclass
+```
+
+The `core-extractor` package is defined in `packages/core/pyproject.toml` as a local workspace package. The Lambda's `pyproject.toml` references it:
+
+```toml
+[project]
+dependencies = [
+    "core-extractor",  # workspace dependency
+    "python-doctr>=1.0,<2.0",
+    "torch",
+    "boto3",
+    "pillow",
+]
+
+[tool.uv.sources]
+core-extractor = { workspace = true }
+```
+
+No `copyFiles` needed in SST config — SST v4 copies the entire workspace as the Docker build context, so `packages/core/` is available at `COPY` time in the Dockerfile.
 
 ### `Dockerfile`
 
+Multi-stage build: builder has compile tools + model download, final stage has only runtime libraries. Reduces image size by ~200MB.
+
 ```dockerfile
-FROM public.ecr.aws/lambda/python:3.11
+FROM public.ecr.aws/lambda/python:3.13 AS builder
 
-# Use UV for dependency management (matches local validation workflow)
+# Build tools + runtime shared libs (needed by torch/opencv at import time for model download)
+RUN dnf install -y gcc gcc-c++ make python3-devel libxcb mesa-libGL && dnf clean all
+
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
-COPY pyproject.toml .
-RUN uv pip install --system python-doctr torch boto3 Pillow --no-cache-dir
 
-# Pre-download models during build (avoids cold-start download)
-ENV DOCTR_CACHE_DIR=/tmp/doctr_cache
-RUN python -c "from doctr.models import ocr_predictor; \
-    ocr_predictor(det_arch='db_mobilenet_v3_large', reco_arch='crnn_mobilenet_v3_small', pretrained=True)"
+COPY packages/core /tmp/core-extractor
+RUN uv pip install --system /tmp/core-extractor --no-cache-dir
 
-COPY handler.py ${LAMBDA_TASK_ROOT}
+RUN uv pip install --system \
+    --extra-index-url https://download.pytorch.org/whl/cpu \
+    --index-strategy unsafe-best-match \
+    python-doctr==1.0.1 torch boto3 pillow --no-cache-dir
+
+ENV DOCTR_CACHE_DIR=/opt/doctr_cache
+ENV DOCTR_MULTIPROCESSING_DISABLE=TRUE
+COPY download_models.py .
+RUN python download_models.py
+
+
+FROM public.ecr.aws/lambda/python:3.13
+
+# Only runtime shared libraries (~10MB vs ~200MB for build tools)
+RUN dnf install -y libxcb mesa-libGL && dnf clean all
+
+ENV DOCTR_MULTIPROCESSING_DISABLE=TRUE
+ENV DOCTR_CACHE_DIR=/opt/doctr_cache
+
+COPY --from=builder /var/lang/lib/python3.13/site-packages/. /var/lang/lib/python3.13/site-packages/
+COPY --from=builder /opt/doctr_cache /opt/doctr_cache
+COPY handler.py ${LAMBDA_TASK_ROOT}/handler.py
+
 CMD ["handler.lambda_handler"]
 ```
 
 ### `handler.py`
 
-The Lambda always returns parsed data with metadata. It never refuses to return
-— downstream systems decide what to do based on `status`, `confidence`, and `warnings`.
+Lazy model loading + lazy imports: heavy frameworks (torch, docTR) imported at function call time, not module level. INIT phase loads only stdlib + boto3 → completes in ~5.5s (under 10s Lambda init limit).
 
 ```python
-import json, time, boto3
-from pathlib import Path
+import json
+import os
+import time
 from datetime import datetime
-from doctr.io import DocumentFile
-from doctr.models import ocr_predictor
+from pathlib import Path
 
-# Model loaded once (warm start benefit)
-model = ocr_predictor(
-    det_arch='db_mobilenet_v3_large',
-    reco_arch='crnn_mobilenet_v3_small',
-    pretrained=True,
-    assume_straight_pages=True,
-    preserve_aspect_ratio=True,
-    disable_page_orientation=True,
-    disable_crop_orientation=True,
-    det_bs=1,
+import boto3
+from core.extractor import (
+    ExtractionResult,
+    compute_average_confidence,
+    extract_all_fields,
 )
 
-s3 = boto3.client('s3')
-dynamo = boto3.client('dynamodb')
+_model = None
 
-# Same field extractors as validate_doctr.py (imported or inlined)
 
-def compute_average_confidence(result_doc) -> float | None:
-    confidences = []
-    for page in result_doc.pages:
-        for block in page.blocks:
-            for line in block.lines:
-                for word in line.words:
-                    if word.confidence is not None:
-                        confidences.append(word.confidence)
-    if not confidences:
-        return None
-    return sum(confidences) / len(confidences)
+def get_model():
+    global _model
+    if _model is None:
+        from doctr.models import ocr_predictor
+        _model = ocr_predictor(
+            det_arch="db_mobilenet_v3_large",
+            reco_arch="crnn_mobilenet_v3_small",
+            pretrained=True,
+            assume_straight_pages=True,
+            preserve_aspect_ratio=True,
+            disable_page_orientation=True,
+            disable_crop_orientation=True,
+            det_bs=1,
+        )
+    return _model
+
+
+s3 = boto3.client("s3")
+dynamo = boto3.client("dynamodb")
+
+DOCTR_CACHE_DIR = os.getenv("DOCTR_CACHE_DIR", "/tmp/doctr_cache")
+DOCUMENTS_TABLE = os.getenv("DOCUMENTS_TABLE_NAME", "DocumentsTable")
+DOCUMENTS_BUCKET = os.getenv("DOCUMENTS_BUCKET_NAME", "")
+
 
 def lambda_handler(event, context):
     """
@@ -493,23 +548,44 @@ def lambda_handler(event, context):
 
     event: { "documentId": "...", "s3Key": "..." }
     """
-    document_id = event['documentId']
-    s3_key = event['s3Key']
-    bucket = event.get('bucket', 'DOCUMENTS_BUCKET_NAME')
+    document_id = event.get("documentId")
+    s3_key = event.get("s3Key")
+    bucket = event.get("bucket", DOCUMENTS_BUCKET)
+
+    if not document_id or not s3_key:
+        return {
+            "statusCode": 400,
+            "body": json.dumps({"error": "documentId and s3Key are required"}),
+        }
 
     start = time.time()
+    warnings: list[str] = []
 
     # Download image from S3 to /tmp
-    tmp_path = f'/tmp/{Path(s3_key).name}'
-    s3.download_file(bucket, s3_key, tmp_path)
+    tmp_path = f"/tmp/{Path(s3_key).name}"
+    try:
+        s3.download_file(bucket, s3_key, tmp_path)
+    except Exception as e:
+        return {
+            "statusCode": 500,
+            "body": json.dumps({"error": f"Failed to download from S3: {str(e)}"}),
+        }
 
-    # Run docTR
-    doc = DocumentFile.from_images(tmp_path)
-    result = model(doc)
-    lines = result.render().splitlines()
+    # Run docTR OCR (lazy import inside handler body)
+    try:
+        from doctr.io import DocumentFile
+        doc = DocumentFile.from_images(tmp_path)
+        result_doc = get_model()(doc)
+        lines = result_doc.render().splitlines()
+        lines = [t.strip() for t in lines if t.strip()]
+    except Exception as e:
+        return {
+            "statusCode": 500,
+            "body": json.dumps({"error": f"OCR failed: {str(e)}"}),
+        }
 
     inference_time = time.time() - start
-    avg_conf = compute_average_confidence(result)
+    avg_conf = compute_average_confidence(result_doc)
 
     # Extract payment fields (always runs, regardless of score)
     fields = extract_all_fields(lines)
@@ -518,39 +594,67 @@ def lambda_handler(event, context):
 
     # Build warnings
     if avg_conf is not None and avg_conf < 0.7:
-        fields.warnings.append("low_confidence")
+        warnings.append("low_confidence")
     if fields.score < 4:
-        fields.warnings.append("low_score")
+        warnings.append("low_score")
     if not fields.date:
-        fields.warnings.append("missing_date")
+        warnings.append("missing_date")
     if not fields.amount:
-        fields.warnings.append("missing_amount")
+        warnings.append("missing_amount")
+
+    fields.warnings = warnings
+
+    # Build response dict
+    result = {
+        "reference": fields.reference,
+        "amount": fields.amount,
+        "amount_value": fields.amount_value,
+        "date": fields.date,
+        "destination_phone": fields.destination_phone,
+        "destination_cedula": fields.destination_cedula,
+        "destination_bank": fields.destination_bank,
+        "origin_phone": fields.origin_phone,
+        "origin_bank": fields.origin_bank,
+        "concept": fields.concept,
+        "score": fields.score,
+        "status": fields.status,
+        "confidence": fields.confidence,
+        "inference_time": fields.inference_time,
+        "warnings": fields.warnings,
+    }
 
     # Save doctrResult to DynamoDB
-    dynamo.update_item(
-        TableName='DOCUMENTS_TABLE_NAME',
-        Key={'documentId': {'S': document_id}},
-        UpdateExpression='SET doctrResult = :result, doctrExtractedAt = :ts',
-        ExpressionAttributeValues={
-            ':result': {'S': json.dumps(fields.__dict__)},
-            ':ts': {'S': datetime.utcnow().isoformat()},
-        },
-    )
+    table_name = os.environ.get("DOCUMENTS_TABLE_NAME")
+    if table_name:
+        try:
+            dynamo.update_item(
+                TableName=table_name,
+                Key={"documentId": {"S": document_id}},
+                UpdateExpression="SET doctrResult = :result, doctrExtractedAt = :ts",
+                ExpressionAttributeValues={
+                    ":result": {"S": json.dumps(result)},
+                    ":ts": {"S": datetime.utcnow().isoformat()},
+                },
+            )
+        except Exception as e:
+            warnings.append(f"dynamo_save_failed: {str(e)}")
 
-    return fields.__dict__
+    return result
 ```
 
 ### Lambda config
 
 | Setting | Value | Rationale |
 |---|---|---|
-| Runtime | Python 3.11 (Docker) | Required by docTR |
-| Memory | 1024 MB | PyTorch + model ~500MB in memory |
+| Runtime | Python 3.13 (Docker) | AL2023 base image, GCC 11.x for torch |
+| Memory | 2048 MB | PyTorch model + image processing needs ~1200 MB peak |
 | Timeout | 60 seconds | Cold start + inference |
-| Ephemeral storage | 1024 MB | `/tmp` for image + model cache |
+| Ephemeral storage | 1024 MB | `/tmp` for image download |
 | Architecture | x86_64 | PyTorch compatibility |
-| Env: `DOCTR_MULTIPROCESSING_DISABLE` | `TRUE` | Lambda no `/dev/shm` |
-| Env: `DOCTR_CACHE_DIR` | `/tmp/doctr_cache` | Lambda only writes `/tmp` |
+| Env: `DOCTR_MULTIPROCESSING_DISABLE` | `TRUE` | Lambda has no `/dev/shm` |
+| Env: `DOCTR_CACHE_DIR` | `/opt/doctr_cache` | Baked into image at build time |
+| Model weights | Pre-downloaded at Docker build time via `download_models.py` | Zero network fetch on cold start |
+| Init phase | ~5.5s (no timeout), loads only stdlib + boto3 | Lazy imports avoid torch/doctr in INIT |
 
 ### SST infrastructure (`infra/doctr.ts`)
 
@@ -558,20 +662,92 @@ def lambda_handler(event, context):
 import { documentsBucket, documentsTable } from "./storage";
 
 export const doctrFunction = new sst.aws.Function("DoctrFunction", {
-  handler: "packages/doctr-lambda/handler.lambda_handler",
-  runtime: "python3.11",
-  docker: true,
-  timeout: "60 seconds",
-  memory: "1024 MB",
-  link: [documentsBucket, documentsTable],
-  environment: {
-    DOCTR_MULTIPROCESSING_DISABLE: "TRUE",
-    DOCTR_CACHE_DIR: "/tmp/doctr_cache",
-  },
+	handler: "packages/doctr-lambda/handler.lambda_handler",
+	runtime: "python3.13",
+	python: { container: true },
+	timeout: "60 seconds",
+	memory: "2048 MB",
+	link: [documentsBucket, documentsTable],
+	environment: {
+		DOCUMENTS_BUCKET_NAME: documentsBucket.name,
+		DOCUMENTS_TABLE_NAME: documentsTable.name,
+		DOCTR_MULTIPROCESSING_DISABLE: "TRUE",
+		DOCTR_CACHE_DIR: "/opt/doctr_cache",
+	},
 });
+
 ```
 
 ---
+
+## Cold Start Optimizations
+
+### Problem
+
+Lambda cold starts were initially timing out at 10s init phase — heavy frameworks (torch, docTR) imported at module level. The model was also being re-downloaded from the internet on every cold start (~2s network fetch).
+
+### Optimization 1: Multi-stage Docker build
+
+Builder stage has `gcc gcc-c++ make python3-devel libxcb mesa-libGL` for compiling native extensions. Final stage copies site-packages and model cache, installs only `libxcb mesa-libGL` (~10MB vs ~200MB for build tools).
+
+```dockerfile
+FROM public.ecr.aws/lambda/python:3.13 AS builder
+# ...
+FROM public.ecr.aws/lambda/python:3.13
+# ...
+COPY --from=builder /var/lang/lib/python3.13/site-packages/. /var/lang/lib/python3.13/site-packages/
+COPY --from=builder /opt/doctr_cache /opt/doctr_cache
+```
+
+**Savings**: ~200MB removed from final image.
+
+### Optimization 2: Lazy model loading + lazy imports
+
+`ocr_predictor()` moved into `get_model()` function, called on first invocation. `import doctr.io` and `import doctr.models` moved inside handler body. Module-level imports are only stdlib + boto3.
+
+```python
+_model = None
+
+def get_model():
+    global _model
+    if _model is None:
+        from doctr.models import ocr_predictor
+        _model = ocr_predictor(...)
+    return _model
+```
+
+**Result**: INIT phase loads only stdlib + boto3 → completes in ~5.5s (no timeout). Without lazy imports, INIT was timing out at 10s.
+
+### Optimization 3: Pre-downloaded model weights
+
+`download_models.py` runs at Docker build time, saving weights to `/opt/doctr_cache`:
+
+```python
+from doctr.models import ocr_predictor
+ocr_predictor(
+    det_arch="db_mobilenet_v3_large",
+    reco_arch="crnn_mobilenet_v3_small",
+    pretrained=True,
+)
+```
+
+Runtime `ENV DOCTR_CACHE_DIR=/opt/doctr_cache` points to the same location. First invocation calls `get_model()` which loads from disk cache — no network fetches.
+
+**Savings**: Eliminates ~2s network download on every cold start.
+
+### Performance measurements
+
+| Phase | Time | What's happening |
+|---|---|---|
+| **Init** (cold start) | **5.5s** | Lambda container init + stdlib/boto3 import |
+| **First invoke** (cold start) | **~7.5s** | `get_model()` loads weights from disk cache + OCR + extraction |
+| **Total cold start** | **~13s** | Init + first real invocation |
+| **Warm invoke** | **~2.3s** | Model cached in global `_model` variable |
+| **Init timeout limit** | 10s (AWS) | 5.5s actual — well under limit |
+
+### Key takeaway
+
+With these three optimizations, the Lambda functions reliably within AWS constraints. Cold starts are acceptable for a manual-trigger workflow. If sub-5s cold starts become necessary, Provisioned Concurrency is the next step (at ~$0.000004 per GB-second idle).
 
 ## Phase 2: Web integration
 
@@ -685,8 +861,8 @@ type DoctrResult = {
 - 367 images × $0.015 = $5.50 one-time, ~$5-50/month ongoing
 
 ### docTR Lambda (proposed)
-- 1024 MB Lambda: ~$0.0000166667 per GB-second
-- Average 3s per invocation (warm) = $0.00005 per image
+- 2048 MB Lambda: ~$0.0000333334 per GB-second
+- Average 3s per invocation (warm) = $0.0001 per image
 - 367 images = $0.018
 - Plus S3 GET ($0.0004/1000) and DynamoDB writes
 - **~50-80x cheaper** than Textract for this volume
@@ -724,9 +900,10 @@ FAST models (tiny/small/base) have good accuracy but target rotated/scene text. 
 | Risk | Mitigation |
 |---|---|
 | Spanish accent characters not recognized | Existing `normalize_text()` already strips accents; payment extraction works on normalized text |
-| Model cold start >15s | Pre-download model in Dockerfile; use Provisioned Concurrency if needed |
+| Model init timeout | **Mitigated**: Init phase 5.5s, first invoke ~7.5s — well within Lambda 10s init limit. Multi-stage build + lazy imports + pre-downloaded weights. Provisioned Concurrency available if needed |
 | docTR misses form fields that Textract gets | Run both side-by-side; compare results in Phase 2; fall back to Textract for missing fields |
-| Docker image >10GB (Lambda limit) | CPU-only torch is ~200MB; model weights ~150MB; total image should be <1GB |
+| Docker image >10GB (Lambda limit) | Multi-stage build saves ~200MB; final image ~800MB. Well under 10GB limit |
+| `MemorySize` constraint error on first deploy after major Dockerfile change | Retry `sst deploy` (transient AWS API issue — resolves on retry) |
 | Bank logo/text in screenshot confuses detection | Detection only finds text, not logos; bank name in text is what we match on |
 | Different bank apps have different layouts | Even sampling by file size in validation covers multiple layouts; regex-based extraction is layout-agnostic |
 

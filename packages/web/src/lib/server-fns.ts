@@ -120,7 +120,6 @@ async function docTrProcess(documentId: string, s3Key: string) {
   }
 
   const result = payload as DoctrResult;
-  console.log("Success", result)
   await saveDoctrResult(documentId, result);
   return result;
 }

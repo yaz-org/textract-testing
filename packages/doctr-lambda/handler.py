@@ -5,8 +5,6 @@ from datetime import datetime
 from pathlib import Path
 
 import boto3
-from doctr.io import DocumentFile
-from doctr.models import ocr_predictor
 from core.extractor import (
     ExtractionResult,
     compute_average_confidence,
@@ -19,6 +17,7 @@ _model = None
 def get_model():
     global _model
     if _model is None:
+        from doctr.models import ocr_predictor
         _model = ocr_predictor(
             det_arch="db_mobilenet_v3_large",
             reco_arch="crnn_mobilenet_v3_small",
@@ -66,6 +65,7 @@ def lambda_handler(event, context):
 
     # Run docTR OCR
     try:
+        from doctr.io import DocumentFile
         doc = DocumentFile.from_images(tmp_path)
         result_doc = get_model()(doc)
         lines = result_doc.render().splitlines()
