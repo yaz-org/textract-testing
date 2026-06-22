@@ -1,4 +1,4 @@
-import { ChevronLeft, ChevronRight, Loader2, ScanText } from "lucide-react";
+import { ChevronLeft, ChevronRight, Copy, Loader2, ScanText } from "lucide-react";
 import { useEffect, useRef } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import {
@@ -20,6 +20,7 @@ import { formatBytes, formatDate } from "#/lib/format";
 import { toast } from "sonner";
 import { reprocessPayment } from "#/lib/server-fns";
 import type { DocumentRow } from "./columns";
+import type { DocTRRawInference } from "#/lib/payment";
 
 interface PreviewDialogProps {
 	open: boolean;
@@ -81,6 +82,7 @@ export function PreviewDialog({
 			await queryClient.invalidateQueries({ queryKey: ["documents"] });
 		},
     onError: (error) => {
+      console.log("OnError", error);
       toast.error(error instanceof Error ? error.message : "Reprocessing failed.");
     }
 	});
@@ -159,73 +161,136 @@ export function PreviewDialog({
 						</div>
 					)}
 
-					{previewDocument?.paymentResult?.status === "VALID" && (
-						<div className="border-t border-slate-200 pt-6 mt-6 space-y-3">
-							<h3 className="font-semibold">Pago Móvil Data</h3>
-							<dl className="grid grid-cols-1 gap-x-4 gap-y-2 text-sm sm:grid-cols-2">
-								<div>
-									<dt className="text-muted-foreground">Referencia</dt>
-									<dd className="font-mono font-medium">
-										{previewDocument.paymentResult.referenceNumber}
-									</dd>
-								</div>
-								<div>
-									<dt className="text-muted-foreground">Monto</dt>
-									<dd className="font-medium">
-										Bs. {previewDocument.paymentResult.amount}
-									</dd>
-								</div>
-								<div>
-									<dt className="text-muted-foreground">Fecha</dt>
-									<dd>{previewDocument.paymentResult.date}</dd>
-								</div>
-								{previewDocument.paymentResult.originPhone && (
+					{(() => {
+						const doc = previewDocument;
+						const latestInference = doc?.inferenceHistory?.at(-1);
+						const payment = latestInference?.payment ?? doc?.paymentResult;
+						if (!payment || payment.status !== "VALID") return null;
+						return (
+							<div className="border-t border-slate-200 pt-6 mt-6 space-y-3">
+								<h3 className="font-semibold">Pago Móvil Data</h3>
+								{latestInference && (
+									<p className="text-xs text-muted-foreground">
+										Engine: {latestInference.inferenceType === "doctr" ? "docTR" : "Textract"}
+										{" · "}
+										Confidence: {latestInference.inferenceType === "doctr"
+											? `${((latestInference.raw as { averageConfidence?: number }).averageConfidence ?? 1 * 100).toFixed(1)}%`
+											: "—"}
+									</p>
+								)}
+								<dl className="grid grid-cols-1 gap-x-4 gap-y-2 text-sm sm:grid-cols-2">
 									<div>
-										<dt className="text-muted-foreground">Teléfono origen</dt>
-										<dd className="font-mono">
-											{previewDocument.paymentResult.originPhone}
+										<dt className="text-muted-foreground">Referencia</dt>
+										<dd className="font-mono font-medium">
+											{payment.referenceNumber}
 										</dd>
 									</div>
-								)}
-								{previewDocument.paymentResult.destinationPhone && (
 									<div>
-										<dt className="text-muted-foreground">Teléfono destino</dt>
-										<dd className="font-mono">
-											{previewDocument.paymentResult.destinationPhone}
+										<dt className="text-muted-foreground">Monto</dt>
+										<dd className="font-medium">
+											Bs. {payment.amount}
 										</dd>
 									</div>
-								)}
-								{previewDocument.paymentResult.destinationCedula && (
 									<div>
-										<dt className="text-muted-foreground">Cédula destino</dt>
-										<dd className="font-mono">
-											{previewDocument.paymentResult.destinationCedula}
-										</dd>
+										<dt className="text-muted-foreground">Fecha</dt>
+										<dd>{payment.date}</dd>
 									</div>
-								)}
-								{previewDocument.paymentResult.originBank && (
-									<div>
-										<dt className="text-muted-foreground">Banco origen</dt>
-										<dd>{previewDocument.paymentResult.originBank}</dd>
+									{payment.originPhone && (
+										<div>
+											<dt className="text-muted-foreground">Teléfono origen</dt>
+											<dd className="font-mono">
+												{payment.originPhone}
+											</dd>
+										</div>
+									)}
+									{payment.destinationPhone && (
+										<div>
+											<dt className="text-muted-foreground">Teléfono destino</dt>
+											<dd className="font-mono">
+												{payment.destinationPhone}
+											</dd>
+										</div>
+									)}
+									{payment.destinationCedula && (
+										<div>
+											<dt className="text-muted-foreground">Cédula destino</dt>
+											<dd className="font-mono">
+												{payment.destinationCedula}
+											</dd>
+										</div>
+									)}
+									{payment.originBank && (
+										<div>
+											<dt className="text-muted-foreground">Banco origen</dt>
+											<dd>{payment.originBank}</dd>
+										</div>
+									)}
+									{payment.destinationBank && (
+										<div>
+											<dt className="text-muted-foreground">Banco destino</dt>
+											<dd>{payment.destinationBank}</dd>
+										</div>
+									)}
+									{payment.concept && (
+										<div>
+											<dt className="text-muted-foreground">Concepto</dt>
+											<dd>{payment.concept}</dd>
+										</div>
+									)}
+								</dl>
+							</div>
+						);
+					})()}
+
+					{previewDocument?.inferenceHistory && previewDocument.inferenceHistory.length > 0 && (
+						<div className="border-t border-slate-200 pt-6 mt-6 space-y-4">
+							<h3 className="font-semibold">Inference History</h3>
+							{previewDocument.inferenceHistory.map((inf, idx) => (
+								<details key={idx} className="rounded-lg border border-slate-200 text-sm">
+									<summary className="cursor-pointer px-3 py-2 font-medium hover:bg-slate-50">
+										#{idx + 1} — {inf.inferenceType === "doctr" ? "docTR" : "Textract"}
+										{inf.payment?.status === "VALID" && (
+											<span className="ml-2 text-green-600">✓ Parsed</span>
+										)}
+									</summary>
+									<div className="border-t border-slate-200 px-3 py-2 space-y-2">
+										{inf.inferenceType === "doctr" && (
+											<>
+												<p>Pages: {(inf.raw as DocTRRawInference).pages ?? "—"}</p>
+												<p>Lines: {(inf.raw as DocTRRawInference).lines ?? "—"}</p>
+												<p>Confidence: {((inf.raw as DocTRRawInference).averageConfidence ?? 1 * 100).toFixed(1)}%</p>
+												<p>Inference time: {(inf.raw as DocTRRawInference).inferenceTimeMs ?? "—"}ms</p>
+												<details className="relative">
+													<summary className="cursor-pointer text-xs text-muted-foreground hover:text-foreground">
+														Raw text ({(inf.raw as DocTRRawInference).allLines.length} lines)
+													</summary>
+													<button
+														type="button"
+														onClick={(e) => {
+															e.stopPropagation();
+															navigator.clipboard.writeText(
+																(inf.raw as DocTRRawInference).allLines.join("\n"),
+															);
+															toast.success("Copiado");
+														}}
+														className="absolute right-2 top-2 z-10 rounded p-1 text-muted-foreground hover:bg-slate-100 hover:text-foreground transition"
+														aria-label="Copy raw text"
+													>
+														<Copy className="size-3.5" />
+													</button>
+													<pre className="mt-1 max-h-48 overflow-auto rounded bg-slate-50 p-2 text-xs font-mono">
+														{(inf.raw as DocTRRawInference).allLines.join("\n")}
+													</pre>
+												</details>
+											</>
+										)}
 									</div>
-								)}
-								{previewDocument.paymentResult.destinationBank && (
-									<div>
-										<dt className="text-muted-foreground">Banco destino</dt>
-										<dd>{previewDocument.paymentResult.destinationBank}</dd>
-									</div>
-								)}
-								{previewDocument.paymentResult.concept && (
-									<div>
-										<dt className="text-muted-foreground">Concepto</dt>
-										<dd>{previewDocument.paymentResult.concept}</dd>
-									</div>
-								)}
-							</dl>
+								</details>
+							))}
 						</div>
 					)}
 
-					{previewDocument?.textractResult && (
+					{previewDocument?.textractResult && !previewDocument.inferenceHistory && (
 						<div className="border-t border-slate-200 pt-6 mt-6 space-y-6">
 							{previewDocument.textractResult.forms.length > 0 && (
 								<section>

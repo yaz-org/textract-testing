@@ -24,11 +24,13 @@ import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { ZipArchive } from "archiver";
 import { Resource } from "sst";
 import { z } from "zod";
-import type { DoctrResult, PagoMovilPayment } from "./payment";
+import type { DoctrResult, InferenceRecord, PagoMovilPayment } from "./payment";
 import type { TextractResult } from "./textract";
 
 const s3 = new S3Client({});
-const dynamo = DynamoDBDocumentClient.from(new DynamoDBClient({}));
+const dynamo = DynamoDBDocumentClient.from(new DynamoDBClient({}), {
+	marshallOptions: { removeUndefinedValues: true },
+});
 
 const fileNameSchema = z
 	.string()
@@ -81,6 +83,7 @@ export type DocumentRecord = {
 	paymentResult?: PagoMovilPayment;
 	doctrResult?: DoctrResult;
 	doctrExtractedAt?: string;
+	inferenceHistory?: InferenceRecord[];
 };
 
 export async function createUploadUrl(
@@ -235,6 +238,26 @@ export async function saveDoctrResult(
 			ExpressionAttributeValues: {
 				":result": result,
 				":ts": new Date().toISOString(),
+			},
+		}),
+	);
+}
+
+export async function saveInference(
+	documentId: string,
+	record: InferenceRecord,
+) {
+	await dynamo.send(
+		new UpdateCommand({
+			TableName: Resource.DocumentsTable.name,
+			Key: { documentId },
+			UpdateExpression:
+				"SET inferenceHistory = list_append(if_not_exists(inferenceHistory, :empty), :record), paymentResult = :payment",
+			ConditionExpression: "attribute_exists(documentId)",
+			ExpressionAttributeValues: {
+				":empty": [],
+				":record": [record],
+				":payment": record.payment ?? null,
 			},
 		}),
 	);

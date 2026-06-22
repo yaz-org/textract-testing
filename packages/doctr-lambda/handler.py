@@ -2,16 +2,27 @@ import json
 import os
 import time
 import traceback
+from datetime import datetime
 from pathlib import Path
 
 import boto3
-from core.extractor import (
-    ExtractionResult,
-    compute_average_confidence,
-    extract_all_fields,
-)
 
 _model = None
+_DET_ARCH = "db_mobilenet_v3_large"
+_RECO_ARCH = "crnn_mobilenet_v3_small"
+
+
+def _compute_average_confidence(result_doc) -> float | None:
+    confidences = []
+    for page in result_doc.pages:
+        for block in page.blocks:
+            for line in block.lines:
+                for word in line.words:
+                    if word.confidence is not None:
+                        confidences.append(word.confidence)
+    if not confidences:
+        return None
+    return sum(confidences) / len(confidences)
 
 
 def get_model():
@@ -29,8 +40,8 @@ def get_model():
         t0 = time.time()
         from doctr.models import ocr_predictor
         _model = ocr_predictor(
-            det_arch="db_mobilenet_v3_large",  # small variant does not exist in docTR 1.0.1
-            reco_arch="crnn_mobilenet_v3_small",
+            det_arch=_DET_ARCH,
+            reco_arch=_RECO_ARCH,
             pretrained=True,
             assume_straight_pages=True,
             preserve_aspect_ratio=True,
@@ -67,10 +78,9 @@ def lambda_handler(event, context):
     print(json.dumps({"level": "INFO", "message": "Processing document", "s3Key": s3_key, "bucket": bucket}))
 
     start = time.time()
+    start_ms = int(time.time() * 1000)
     handler_steps = {}
     try:
-        warnings: list[str] = []
-
         t1 = time.time()
         from doctr.io import DocumentFile
         handler_steps["import_doctr_io"] = round(time.time() - t1, 3)
@@ -88,55 +98,33 @@ def lambda_handler(event, context):
         raw_text = result_doc.render()
         lines = [t.strip() for t in raw_text.splitlines() if t.strip()]
 
-        raw_bytes = len(raw_text.encode("utf-8"))
-        raw_size = f"{raw_bytes} B" if raw_bytes < 1024 else f"{raw_bytes / 1024:.1f} KB"
+        elapsed_ms = int(time.time() * 1000) - start_ms
+        avg_conf = _compute_average_confidence(result_doc)
+        total_blocks = sum(len(page.blocks) for page in result_doc.pages)
+
         print(json.dumps({
             "level": "INFO",
-            "message": "Inference size",
+            "message": "Document processed",
             "s3Key": s3_key,
-            "pages": len(result_doc.pages),
-            "blocks": sum(len(page.blocks) for page in result_doc.pages),
-            "lines": len(lines),
-            "chars": sum(len(l) for l in lines),
-            "raw_size": raw_size,
+            "bucket": bucket,
+            "duration_seconds": round(time.time() - start, 3),
+            "handler_steps": handler_steps,
         }))
 
-        inference_time = time.time() - start
-        avg_conf = compute_average_confidence(result_doc)
-
-        fields = extract_all_fields(lines)
-        fields.confidence = avg_conf
-        fields.inference_time = inference_time
-
-        if avg_conf is not None and avg_conf < 0.7:
-            warnings.append("low_confidence")
-        if fields.score < 4:
-            warnings.append("low_score")
-        if not fields.date:
-            warnings.append("missing_date")
-        if not fields.amount:
-            warnings.append("missing_amount")
-
-        fields.warnings = warnings
-
-        print(json.dumps({"level": "INFO", "message": "Document processed", "s3Key": s3_key, "bucket": bucket, "duration_seconds": round(time.time() - start, 3), "handler_steps": handler_steps}))
-
         return {
-            "reference": fields.reference,
-            "amount": fields.amount,
-            "amount_value": fields.amount_value,
-            "date": fields.date,
-            "destination_phone": fields.destination_phone,
-            "destination_cedula": fields.destination_cedula,
-            "destination_bank": fields.destination_bank,
-            "origin_phone": fields.origin_phone,
-            "origin_bank": fields.origin_bank,
-            "concept": fields.concept,
-            "score": fields.score,
-            "status": fields.status,
-            "confidence": fields.confidence,
-            "inference_time": fields.inference_time,
-            "warnings": fields.warnings,
+            "inferenceType": "doctr",
+            "extractedAt": datetime.utcnow().isoformat() + "Z",
+            "pages": len(result_doc.pages),
+            "blocks": total_blocks,
+            "lines": len(lines),
+            "text": raw_text,
+            "allLines": lines,
+            "averageConfidence": avg_conf,
+            "inferenceTimeMs": elapsed_ms,
+            "modelInfo": {
+                "detArch": _DET_ARCH,
+                "recoArch": _RECO_ARCH,
+            },
         }
     except Exception as e:
         duration = round(time.time() - start, 3)

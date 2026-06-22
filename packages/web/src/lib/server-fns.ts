@@ -13,9 +13,11 @@ import {
 	getPresignedUrl,
 	listDocuments,
 	saveDocumentRecord,
-	saveDoctrResult,
+	saveInference,
 	uploadRequestSchema,
 } from "./documents";
+import { extractDocTRPayment } from "./doctr-extractor";
+import type { DocTRRawInference, InferenceRecord } from "./payment";
 
 const lambda = new LambdaClient({});
 
@@ -115,11 +117,24 @@ async function docTrProcess(documentId: string, s3Key: string) {
     );
   }
 
-  console.log(payload)
+  // Raw inference from lambda
+  const rawInference = payload as DocTRRawInference;
 
-  // const result = payload as DoctrResult;
-  await saveDoctrResult(documentId, payload);
-  return payload;
+  // Client-side extraction from raw lines
+  const payment = extractDocTRPayment(rawInference.allLines);
+
+  // Build inference record
+  const inferenceRecord: InferenceRecord = {
+    inferenceType: "doctr",
+    extractedAt: rawInference.extractedAt,
+    raw: rawInference,
+    payment,
+  };
+
+  // Save inference + payment result atomically
+  await saveInference(documentId, inferenceRecord);
+
+  return inferenceRecord;
 }
 
 export const reprocessPayment = createServerFn({ method: "POST" })

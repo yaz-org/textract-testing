@@ -6,7 +6,7 @@ export type PagoMovilPayment = {
 	totalScore: number;
 	// Core fields
 	referenceNumber: string;
-	date: string;
+	date?: string;
 	amount: string;
 	amountValue: number;
 	// Optional fields
@@ -18,6 +18,7 @@ export type PagoMovilPayment = {
 	concept?: string;
 };
 
+// Legacy docTR result type (kept for backward compatibility)
 export type DoctrResult = {
 	reference: string;
 	amount: string;
@@ -34,4 +35,42 @@ export type DoctrResult = {
 	confidence: number | null;
 	inference_time: number;
 	warnings: string[];
+};
+
+// ---------------------------------------------------------------------------
+// New Inference model — raw + parsed
+// ---------------------------------------------------------------------------
+
+export type InferenceType = "doctr" | "textract";
+
+export type DocTRRawInference = {
+	inferenceType: "doctr";
+	extractedAt: string;
+	pages: number;
+	blocks: number;
+	lines: number;
+	text: string;
+	allLines: string[];
+	averageConfidence: number | null;
+	inferenceTimeMs: number;
+	modelInfo: {
+		detArch: string;
+		recoArch: string;
+	};
+};
+
+export type TextractRawInference = {
+	inferenceType: "textract";
+	extractedAt: string;
+	layout: { blockType: string; text: string; confidence: number }[];
+	forms: { key: string; value: string; confidence: number }[];
+};
+
+export type RawInference = DocTRRawInference | TextractRawInference;
+
+export type InferenceRecord = {
+	inferenceType: InferenceType;
+	extractedAt: string;
+	raw: RawInference;
+	payment?: PagoMovilPayment;
 };

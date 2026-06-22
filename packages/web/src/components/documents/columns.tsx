@@ -80,28 +80,30 @@ export function getColumns({
 			header: "Extracted",
 			enableSorting: false,
 			cell: ({ row }) => {
-				if (!row.original.textractResult) {
+				const doc = row.original;
+
+				// Try new inferenceHistory first, then fall back to legacy
+				const latestInference = doc.inferenceHistory?.at(-1);
+				const payment = latestInference?.payment ?? doc.paymentResult;
+
+				if (!payment && !doc.textractResult && !doc.doctrResult && !latestInference) {
 					return <span className="text-muted-foreground">—</span>;
 				}
 
-				const payment = row.original.paymentResult;
+				const inferenceType = latestInference?.inferenceType ?? "textract";
+				const extractedAt = latestInference?.extractedAt ?? doc.textractExtractedAt ?? doc.doctrExtractedAt;
 
 				if (!payment) {
-					const date = row.original.textractExtractedAt;
-					if (!date) {
-						return (
-							<span className="text-muted-foreground">
-								No extracted date found
-							</span>
-						);
+					if (!extractedAt) {
+						return <span className="text-muted-foreground">No data</span>;
 					}
 					return (
-						<div className="flex items-center">
+						<div className="flex items-center gap-1.5">
 							<Tooltip>
 								<TooltipTrigger asChild>
-									<Badge variant="secondary">OCR</Badge>
+									<Badge variant="secondary">{inferenceType === "doctr" ? "docTR" : "OCR"}</Badge>
 								</TooltipTrigger>
-								<TooltipContent>{formatDate(date)}</TooltipContent>
+								<TooltipContent>{formatDate(extractedAt)}</TooltipContent>
 							</Tooltip>
 						</div>
 					);
@@ -109,7 +111,7 @@ export function getColumns({
 
 				if (payment.status === "VALID") {
 					return (
-						<div className="flex items-center">
+						<div className="flex items-center gap-1.5">
 							<Tooltip>
 								<TooltipTrigger asChild>
 									<Badge>Pago Móvil</Badge>
@@ -122,18 +124,20 @@ export function getColumns({
 									</span>
 								</TooltipContent>
 							</Tooltip>
+							<span className="text-xs text-muted-foreground">{inferenceType === "doctr" ? "docTR" : "OCR"}</span>
 						</div>
 					);
 				}
 
 				return (
-					<div className="flex items-center">
+					<div className="flex items-center gap-1.5">
 						<Tooltip>
 							<TooltipTrigger asChild>
 								<Badge variant="outline">No payment</Badge>
 							</TooltipTrigger>
 							<TooltipContent>No pago móvil data found</TooltipContent>
 						</Tooltip>
+						<span className="text-xs text-muted-foreground">{inferenceType === "doctr" ? "docTR" : "OCR"}</span>
 					</div>
 				);
 			},
