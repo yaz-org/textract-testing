@@ -10,6 +10,12 @@ class Resource:
     class DoctrFunction:
         name: str
         type: str
+    class DocumentDLQ:
+        type: str
+        url: str
+    class DocumentQueue:
+        type: str
+        url: str
     class Documents:
         name: str
         type: str

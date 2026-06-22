@@ -16,6 +16,7 @@ export default $config({
       BucketName: infra.documentsBucket.name,
       DocumentsTableName: infra.documentsTable.name,
       DoctrFunctionName: infra.doctrFunction.name,
+      DocumentQueueUrl: infra.documentQueue.url,
       WebUrl: infra.web.url,
     };
   },

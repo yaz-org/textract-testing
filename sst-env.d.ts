@@ -10,6 +10,14 @@ declare module "sst" {
       "name": string
       "type": "sst.aws.Function"
     }
+    "DocumentDLQ": {
+      "type": "sst.aws.Queue"
+      "url": string
+    }
+    "DocumentQueue": {
+      "type": "sst.aws.Queue"
+      "url": string
+    }
     "Documents": {
       "name": string
       "type": "sst.aws.Bucket"

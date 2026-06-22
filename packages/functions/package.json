@@ -1,0 +1,16 @@
+{
+  "name": "@textract-testing/functions",
+  "type": "module",
+  "scripts": {},
+  "dependencies": {
+    "@aws-sdk/client-dynamodb": "*",
+    "@aws-sdk/client-lambda": "*",
+    "@aws-sdk/lib-dynamodb": "*",
+    "@textract-testing/shared": "*",
+    "sst": "*"
+  },
+  "devDependencies": {
+    "@types/node": "^22",
+    "typescript": "^6.0.2"
+  }
+}

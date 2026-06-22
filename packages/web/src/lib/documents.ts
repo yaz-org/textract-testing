@@ -32,6 +32,8 @@ const dynamo = DynamoDBDocumentClient.from(new DynamoDBClient({}), {
 	marshallOptions: { removeUndefinedValues: true },
 });
 
+
+
 const fileNameSchema = z
 	.string()
 	.trim()
@@ -238,26 +240,6 @@ export async function saveDoctrResult(
 			ExpressionAttributeValues: {
 				":result": result,
 				":ts": new Date().toISOString(),
-			},
-		}),
-	);
-}
-
-export async function saveInference(
-	documentId: string,
-	record: InferenceRecord,
-) {
-	await dynamo.send(
-		new UpdateCommand({
-			TableName: Resource.DocumentsTable.name,
-			Key: { documentId },
-			UpdateExpression:
-				"SET inferenceHistory = list_append(if_not_exists(inferenceHistory, :empty), :record), paymentResult = :payment",
-			ConditionExpression: "attribute_exists(documentId)",
-			ExpressionAttributeValues: {
-				":empty": [],
-				":record": [record],
-				":payment": record.payment ?? null,
 			},
 		}),
 	);

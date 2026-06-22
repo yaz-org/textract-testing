@@ -94,7 +94,7 @@ function DocumentsPage() {
 		onSuccess: ({ successCount, failCount, lastError }) => {
 			if (failCount === 0) {
 				toast.success(
-					`Extraction complete for ${successCount} document${successCount === 1 ? "" : "s"}.`,
+					`Extraction scheduled for ${successCount} document${successCount === 1 ? "" : "s"}.`,
 				);
 			} else {
 				toast.error(
