@@ -4,8 +4,8 @@ export const doctrFunction = new sst.aws.Function("DoctrFunction", {
 	handler: "packages/doctr-lambda/handler.lambda_handler",
 	runtime: "python3.13",
 	python: { container: true },
-	timeout: "60 seconds",
-	memory: "3008 MB",
+	timeout: "120 seconds",
+	memory: "2048 MB",
 	link: [documentsBucket, documentsTable],
 	environment: {
 		DOCUMENTS_BUCKET_NAME: documentsBucket.name,

@@ -14,12 +14,8 @@ import {
 	listDocuments,
 	saveDocumentRecord,
 	saveDoctrResult,
-	savePaymentResult,
-	saveTextractResult,
 	uploadRequestSchema,
 } from "./documents";
-import { extractPagoMovil } from "./payment-extractor";
-import { analyzeDocument } from "./textract";
 
 const lambda = new LambdaClient({});
 
@@ -65,12 +61,13 @@ export const processDocument = createServerFn({ method: "POST" })
 			const batch = data.slice(i, i + CONCURRENCY_MAX);
 			const batchResults = await Promise.all(
 				batch.map(async ({ documentId, s3Key }) => {
-					const result = await analyzeDocument(s3Key);
-					const paymentResult = extractPagoMovil(result);
-					await Promise.all([
-						saveTextractResult(documentId, result),
-						savePaymentResult(documentId, paymentResult),
-					]);
+          await docTrProcess(documentId, s3Key);
+					// const result = await analyzeDocument(s3Key);
+					// const paymentResult = extractPagoMovil(result);
+					// await Promise.all([
+					// 	saveTextractResult(documentId, result),
+					// 	savePaymentResult(documentId, paymentResult),
+					// ]);
 					return { documentId, success: true as const };
 				}),
 			);

@@ -79,13 +79,13 @@ def load_model():
         torch.set_num_threads(DOCTR_NUM_THREADS)
         console.print(f"[dim]PyTorch threads capped at {DOCTR_NUM_THREADS} (DOCTR_NUM_THREADS)[/dim]")
     console.print("[bold]Loading docTR model...[/bold]")
-    console.print("  Detection:      [cyan]db_mobilenet_v3_large[/cyan] (4.2M params)")
+    console.print("  Detection:      [cyan]db_mobilenet_v3_large[/cyan] (4.2M params)  # only DB detection available in docTR 1.0.1")
     console.print("  Recognition:    [cyan]crnn_mobilenet_v3_small[/cyan] (2.1M params)")
     console.print("  Assumptions:    straight pages, no orientation classification")
     console.print()
 
     model = ocr_predictor(
-        det_arch="db_mobilenet_v3_large",
+        det_arch="db_mobilenet_v3_large",  # only DB detection available in docTR 1.0.1
         reco_arch="crnn_mobilenet_v3_small",
         pretrained=True,
         assume_straight_pages=True,
@@ -120,7 +120,7 @@ def process_batch(batch: list[Path]) -> list[dict]:
     if num_threads > 0:
         torch.set_num_threads(num_threads)
     model = ocr_predictor(
-        det_arch="db_mobilenet_v3_large",
+        det_arch="db_mobilenet_v3_large",  # only DB detection available in docTR 1.0.1
         reco_arch="crnn_mobilenet_v3_small",
         pretrained=True,
         assume_straight_pages=True,
@@ -355,7 +355,7 @@ def main():
         console.print(f"    {label:<15} : {count}/{processed_count} ({pct:.0f}%)")
 
     console.print()
-    console.print(f"  Model: [cyan]db_mobilenet_v3_large[/cyan] + [cyan]crnn_mobilenet_v3_small[/cyan]")
+    console.print(f"  Model: [cyan]db_mobilenet_v3_large[/cyan] + [cyan]crnn_mobilenet_v3_small[/cyan]  # only DB detection available in docTR 1.0.1")
     console.print(f"  Config: assume_straight_pages=True, orientation disabled")
 
     if issues:

@@ -84,6 +84,8 @@ Banesco receipt:
 
 docTR is ready for Lambda deployment. The recommended model combo (`db_mobilenet_v3_large` + `crnn_mobilenet_v3_small`) handles phone screenshot OCR well. Field extraction can be ported from the existing TypeScript logic with minimal changes.
 
+> **2026-06-21**: `db_mobilenet_v3_small` does not exist in docTR 1.0.1 (no small variant of DB detection model). Cold start improvements deferred to timing instrumentation (added in handler) and timeout increase to 120s. See the Cold Start Optimizations section for next steps.
+
 ---
 
 ## Overview
@@ -160,7 +162,7 @@ Constants (all overridable via env vars):
 - `SCORE_THRESHOLD` — minimum score for valid receipt, default 4
 - `DOCTR_NUM_THREADS` — PyTorch CPU thread limit, default 0 (no cap)
 - `MAX_WORKERS` — parallel worker processes, default 0 (sequential)
-- Model arch: `db_mobilenet_v3_large` + `crnn_mobilenet_v3_small`
+- Model arch: `db_mobilenet_v3_large` + `crnn_mobilenet_v3_small`  <!-- no small variant in docTR 1.0.1 -->
 
 #### 2. Venezuelan bank list (ported from `packages/web/src/lib/banks.ts`)
 
@@ -245,7 +247,7 @@ Max score: 13. Current threshold in TS code: 4 (considered valid pago móvil rec
 
 ```python
 model = ocr_predictor(
-    det_arch='db_mobilenet_v3_large',
+    det_arch='db_mobilenet_v3_large',   # no small variant in docTR 1.0.1
     reco_arch='crnn_mobilenet_v3_small',
     pretrained=True,
     assume_straight_pages=True,        # screenshots are upright
@@ -539,7 +541,7 @@ def get_model():
                 shutil.copytree("/opt/doctr_cache", DOCTR_CACHE_DIR)
         from doctr.models import ocr_predictor
         _model = ocr_predictor(
-            det_arch="db_mobilenet_v3_large",
+            det_arch="db_mobilenet_v3_large",  # no small variant in docTR 1.0.1
             reco_arch="crnn_mobilenet_v3_small",
             pretrained=True,
             assume_straight_pages=True,
