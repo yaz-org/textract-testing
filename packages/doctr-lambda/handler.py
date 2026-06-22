@@ -85,7 +85,21 @@ def lambda_handler(event, context):
         handler_steps["read_image"] = round(time.time() - t1, 3)
 
         result_doc = get_model()(doc)
-        lines = [t.strip() for t in result_doc.render().splitlines() if t.strip()]
+        raw_text = result_doc.render()
+        lines = [t.strip() for t in raw_text.splitlines() if t.strip()]
+
+        raw_bytes = len(raw_text.encode("utf-8"))
+        raw_size = f"{raw_bytes} B" if raw_bytes < 1024 else f"{raw_bytes / 1024:.1f} KB"
+        print(json.dumps({
+            "level": "INFO",
+            "message": "Inference size",
+            "s3Key": s3_key,
+            "pages": len(result_doc.pages),
+            "blocks": sum(len(page.blocks) for page in result_doc.pages),
+            "lines": len(lines),
+            "chars": sum(len(l) for l in lines),
+            "raw_size": raw_size,
+        }))
 
         inference_time = time.time() - start
         avg_conf = compute_average_confidence(result_doc)
