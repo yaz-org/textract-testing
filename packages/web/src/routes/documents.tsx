@@ -24,6 +24,9 @@ function DocumentsPage() {
 	const documentsQuery = useQuery({
 		queryKey: ["documents"],
 		queryFn: () => getDocuments(),
+		refetchInterval: 30 * 60 * 1000,
+		staleTime: 30 * 60 * 1000,
+		refetchIntervalInBackground: true,
 	});
 
 	const [pendingIds, setPendingIds] = useState<Set<string>>(new Set());

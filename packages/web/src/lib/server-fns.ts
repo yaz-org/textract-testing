@@ -14,7 +14,7 @@ import {
 	saveDocumentRecord,
 	uploadRequestSchema,
 } from "./documents";
-import { exportDocumentsZip } from "@textract-testing/shared";
+import { exportDocumentsZip } from "./documents";
 
 const sqs = new SQSClient({});
 
@@ -90,8 +90,8 @@ export const reprocessPayment = createServerFn({ method: "POST" })
 		return { success: true as const };
 	});
 
-export const exportDocumentsAsZip = createServerFn({ method: "POST" }).handler(
-	async () => {
-		return exportDocumentsZip();
+export const exportDocumentsAsZip = createServerFn({ method: "POST" })
+.handler(async () => {
+		return await exportDocumentsZip();
 	},
 );
