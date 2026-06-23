@@ -7,6 +7,7 @@ import {Button} from "#/components/ui/button.tsx";
 import {formatBytes, formatDate} from "#/lib/format";
 import {toast} from "sonner";
 import {reprocessPayment} from "#/lib/server-fns";
+import {_BANKS} from "#/lib/banks";
 import type {DocumentRow} from "./columns";
 import type {DocTRRawInference} from "#/lib/payment";
 
@@ -31,6 +32,12 @@ export function PreviewDialog({
                                 goToNext,
                                 onClose,
                               }: PreviewDialogProps) {
+  function getBankDisplay(code: string | undefined): string {
+    if (!code) return "";
+    const bank = _BANKS.find(b => b.bankCode === code);
+    return bank ? `${bank.bankCode} — ${bank.acronym} — ${bank.fullName}` : code;
+  }
+
   const lastScrollTime = useRef(0);
 
   useEffect(() => {
@@ -194,7 +201,7 @@ export function PreviewDialog({
                               </div>
                               <div>
                                 <dt className="text-muted-foreground">Banco origen</dt>
-                                <dd>{payment.originBank ?? ""}</dd>
+                                <dd>{getBankDisplay(payment.originBank)}</dd>
                               </div>
                               <div>
                                 <dt className="text-muted-foreground">Teléfono destino</dt>
@@ -204,7 +211,7 @@ export function PreviewDialog({
                               </div>
                               <div>
                                 <dt className="text-muted-foreground">Banco destino</dt>
-                                <dd>{payment.destinationBank ?? ""}</dd>
+                                <dd>{getBankDisplay(payment.destinationBank)}</dd>
                               </div>
                               <div>
                                 <dt className="text-muted-foreground">Cédula destino</dt>
