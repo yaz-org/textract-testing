@@ -53,6 +53,8 @@ export function findValueNearLabel(
     if (fuzzyMatchLabel(lines[i], labels)) {
       for (let j = 1; j <= maxDistance && i + j < lines.length; j++) {
         const candidate = getCleanValue(lines[i + j]);
+        // Stop scanning if we hit a known field label boundary
+        if (fuzzyMatchLabel(candidate, ALL_FIELD_LABELS)) break;
         if (valuePattern) {
           const m = candidate.match(valuePattern);
           if (m) return m[0];
@@ -66,7 +68,7 @@ export function findValueNearLabel(
 }
 
 export const VZLA_PHONE = /0(412|414|416|424|426)[\s-]?\d{7}/;
-export const MASKED_PHONE = /0\d{1,3}\*[*\s-]*\d{0,4}/;
+export const MASKED_PHONE = /0\d{1,3}[")*][*"\s-)]*\d{0,4}/;
 export const LOOSE_PHONE = /0(?:412|414|416|424|426)[\s.,/-]*\d[\s.,/-]*\d[\s.,/-]*\d[\s.,/-]*\d[\s.,/-]*\d[\s.,/-]*\d[\s.,/-]*\d/;
 export const INTL_PHONE = /5841[246]\d{7}/;
 export const CEDULA_PREFIXED = /[VEJG]\s*[-]?\s*(?:\d{1,3}\.)*\d{3,}/i;
@@ -148,6 +150,8 @@ export function parseVzlaDate(text: string): string | undefined {
 
 export function matchBank(text: string): string | null {
   const normalized = normalizeText(text);
+
+  // First pass: standard substring matching
   for (const bank of _BANKS) {
     const candidates = [
       bank.shortName,
@@ -157,13 +161,32 @@ export function matchBank(text: string): string | null {
     ];
     for (const candidate of candidates) {
       if (normalized.includes(normalizeText(candidate))) {
-        return bank.shortName;
+        return bank.bankCode;
       }
     }
     if (normalized.includes(normalizeText(bank.bankCode))) {
-      return bank.shortName;
+      return bank.bankCode;
     }
   }
+
+  // Second pass: tight matching (spaceless) for OCR concatenation artifacts
+  // e.g. "BancoFondoComun" should match "Banco Fondo Común"
+  const tightInput = normalized.replace(/\s+/g, "");
+  for (const bank of _BANKS) {
+    const candidates = [
+      bank.shortName,
+      bank.fullName,
+      bank.acronym,
+      ...bank.alternativeNames,
+    ];
+    for (const candidate of candidates) {
+      const tightCandidate = normalizeText(candidate).replace(/\s+/g, "");
+      if (tightInput.includes(tightCandidate)) {
+        return bank.bankCode;
+      }
+    }
+  }
+
   return null;
 }
 
@@ -221,9 +244,24 @@ export const ORIGIN_PHONE_LABELS = [
 
 export const ORIGIN_BANK_LABELS = ["banco emisor", "banco origen", "banco de origen"];
 
+export const DEBITED_ACCOUNT_LABELS = [
+  "cuenta debitada", "cuenta debitada:",
+  "cuenta a debitar", "cuenta a debitar:",
+];
+
 export const CONCEPT_LABELS = [
   "concepto", "concepto:", "concepte:", "descripción",
   "descripción:", "motivo", "detalle",
+];
+
+export const ALL_FIELD_LABELS = [
+  ...new Set([
+    ...REF_LABELS, ...AMOUNT_LABELS, ...DATE_LABELS,
+    ...DEST_PHONE_LABELS, ...DEST_CEDULA_LABELS, ...DEST_BANK_LABELS,
+    ...ORIGIN_PHONE_LABELS, ...ORIGIN_BANK_LABELS,
+    ...DEBITED_ACCOUNT_LABELS, ...CONCEPT_LABELS,
+    ...BENEFICIARY_LABELS,
+  ]),
 ];
 
 export const SCORE_THRESHOLD = 4;
@@ -258,6 +296,12 @@ export function scoreReceipt(allLines: string[]): number {
   if (successRegex.test(normalized)) score += 1;
 
   return score;
+}
+
+export function isTpagoReceipt(lines: string[]): boolean {
+  const normalized = normalizeText(lines.join(" "));
+  const matches = normalized.match(/tpago/g);
+  return matches !== null && matches.length >= 2;
 }
 
 export function parseCompoundBeneficiary(text: string): {

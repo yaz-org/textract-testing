@@ -113,12 +113,11 @@ export function PreviewDialog({
                       <ChevronRight className="size-6"/>
                     </button>
                   </div>
-                  <div className="w-80 shrink-0 space-y-4">
-                    <div>
-                      <h2 className="break-words text-lg font-semibold">
-                        {previewDocument.fileName}
-                      </h2>
-                    </div>
+                  <div className="w-85 shrink-0 space-y-4">
+
+                    <h2 className="wrap-break-word text-xs font-semibold">
+                      {previewDocument.fileName}
+                    </h2>
                     <Button
                         type="button"
                         variant="outline"
@@ -162,7 +161,7 @@ export function PreviewDialog({
                                   Confidence: {latestInference.inferenceType === "doctr"
                                     ? `${((latestInference.raw as {
                                       averageConfidence?: number
-                                    }).averageConfidence ?? 1 * 100).toFixed(1)}%`
+                                    }).averageConfidence ?? 100).toFixed(3)}%`
                                     : "—"}
                                 </p>
                             )}
@@ -181,50 +180,38 @@ export function PreviewDialog({
                               </div>
                               <div>
                                 <dt className="text-muted-foreground">Fecha</dt>
-                                <dd>{payment.date}</dd>
+                                <dd>{payment.date ?? ""}</dd>
                               </div>
-                              {payment.originPhone && (
-                                  <div>
-                                    <dt className="text-muted-foreground">Teléfono origen</dt>
-                                    <dd className="font-mono">
-                                      {payment.originPhone}
-                                    </dd>
-                                  </div>
-                              )}
-                              {payment.destinationPhone && (
-                                  <div>
-                                    <dt className="text-muted-foreground">Teléfono destino</dt>
-                                    <dd className="font-mono">
-                                      {payment.destinationPhone}
-                                    </dd>
-                                  </div>
-                              )}
-                              {payment.destinationCedula && (
-                                  <div>
-                                    <dt className="text-muted-foreground">Cédula destino</dt>
-                                    <dd className="font-mono">
-                                      {payment.destinationCedula}
-                                    </dd>
-                                  </div>
-                              )}
-                              {payment.originBank && (
-                                  <div>
-                                    <dt className="text-muted-foreground">Banco origen</dt>
-                                    <dd>{payment.originBank}</dd>
-                                  </div>
-                              )}
-                              {payment.destinationBank && (
-                                  <div>
-                                    <dt className="text-muted-foreground">Banco destino</dt>
-                                    <dd>{payment.destinationBank}</dd>
-                                  </div>
-                              )}
-                              {payment.concept && (
-                                  <div>
-                                    <dt className="text-muted-foreground">Concepto</dt>
-                                    <dd>{payment.concept}</dd>
-                                  </div>
-                              )}
+                              <div>
+                                <dt className="text-muted-foreground">Concepto</dt>
+                                <dd>{payment.concept ?? ""}</dd>
+                              </div>
+                              <div>
+                                <dt className="text-muted-foreground">Teléfono origen</dt>
+                                <dd className="font-mono">
+                                  {payment.originPhone ?? ""}
+                                </dd>
+                              </div>
+                              <div>
+                                <dt className="text-muted-foreground">Banco origen</dt>
+                                <dd>{payment.originBank ?? ""}</dd>
+                              </div>
+                              <div>
+                                <dt className="text-muted-foreground">Teléfono destino</dt>
+                                <dd className="font-mono">
+                                  {payment.destinationPhone ?? ""}
+                                </dd>
+                              </div>
+                              <div>
+                                <dt className="text-muted-foreground">Banco destino</dt>
+                                <dd>{payment.destinationBank ?? ""}</dd>
+                              </div>
+                              <div>
+                                <dt className="text-muted-foreground">Cédula destino</dt>
+                                <dd className="font-mono">
+                                  {payment.destinationCedula ?? ""}
+                                </dd>
+                              </div>
                             </dl>
                           </div>
                       );

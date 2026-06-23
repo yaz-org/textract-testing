@@ -185,7 +185,6 @@ export const _BANKS = [
       "Banco Bicentenario",
       "Banfoandes",
       "Confederado",
-      "Central",
       "Bolívar Banco",
     ],
     logoUrl: "https://www.bdt.com.ve/images/logo.svg",

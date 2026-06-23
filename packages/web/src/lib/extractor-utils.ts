@@ -30,8 +30,10 @@ export {
   BENEFICIARY_LABELS,
   ORIGIN_PHONE_LABELS,
   ORIGIN_BANK_LABELS,
+  DEBITED_ACCOUNT_LABELS,
   CONCEPT_LABELS,
   SCORE_THRESHOLD,
   scoreReceipt,
   parseCompoundBeneficiary,
+  isTpagoReceipt,
 } from "@textract-testing/shared";

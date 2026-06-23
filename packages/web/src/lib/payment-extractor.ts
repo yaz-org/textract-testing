@@ -14,6 +14,7 @@ import {
 	matchBank,
 	stripBankCode,
 	parseCompoundBeneficiary,
+	isTpagoReceipt,
 	VZLA_PHONE,
 	MASKED_PHONE,
 	CEDULA_PREFIXED,
@@ -29,6 +30,7 @@ import {
 	BENEFICIARY_LABELS,
 	ORIGIN_PHONE_LABELS,
 	ORIGIN_BANK_LABELS,
+	DEBITED_ACCOUNT_LABELS,
 	CONCEPT_LABELS,
 	SCORE_THRESHOLD,
 } from "./extractor-utils";
@@ -242,8 +244,8 @@ export function extractPagoMovil(result: TextractResult): PagoMovilPayment {
 	// --- Origin data ---
 	let originPhone: string | undefined =
 		extractFieldFromForms(forms, ORIGIN_PHONE_LABELS, (v) => extractPhone(v)) ??
-		findValueNearLabel(layoutLines, ORIGIN_PHONE_LABELS, VZLA_PHONE) ??
-		findValueNearLabel(layoutLines, ORIGIN_PHONE_LABELS, MASKED_PHONE) ??
+		findValueNearLabel(layoutLines, ORIGIN_PHONE_LABELS, VZLA_PHONE, 2) ??
+		findValueNearLabel(layoutLines, ORIGIN_PHONE_LABELS, MASKED_PHONE, 2) ??
 		undefined;
 
 	let originBank: string | undefined =
@@ -270,6 +272,28 @@ export function extractPagoMovil(result: TextractResult): PagoMovilPayment {
 			} else {
 				const bankP = matchBank(origValue);
 				if (bankP) originBank = bankP;
+			}
+		}
+	}
+
+	if (!originBank) {
+		const debitedValue = findValueNearLabel(layoutLines, DEBITED_ACCOUNT_LABELS);
+		if (debitedValue) {
+			const bank = matchBank(debitedValue);
+			if (bank) originBank = bank;
+		}
+	}
+
+	if (!originBank && isTpagoReceipt(layoutLines)) {
+		originBank = "0105";
+	}
+
+	if (!originBank) {
+		for (const line of layoutLines) {
+			const bank = matchBank(line);
+			if (bank) {
+				originBank = bank;
+				break;
 			}
 		}
 	}

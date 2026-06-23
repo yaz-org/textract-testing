@@ -32,7 +32,7 @@ VENEZUELAN_BANKS: list[dict[str, Any]] = [
     {"bankCode": "0172", "acronym": "Bancamiga", "shortName": "Bancamiga", "fullName": "Bancamiga, Banco Universal, C.A.", "alternativeNames": ["Bancamiga Banco Microfinanciero"]},
     {"bankCode": "0173", "acronym": "BID", "shortName": "Banco Internacional de Desarrollo", "fullName": "Banco Internacional de Desarrollo, C.A. Banco Universal", "alternativeNames": []},
     {"bankCode": "0174", "acronym": "Banplus", "shortName": "Banplus", "fullName": "Banplus Banco Universal, C.A.", "alternativeNames": ["Banplus Banco Comercial"]},
-    {"bankCode": "0175", "acronym": "BDT", "shortName": "Banco Digital de los Trabajadores", "fullName": "Banco Digital de los Trabajadores, Banco Universal C.A.", "alternativeNames": ["Banco Bicentenario del Pueblo", "Banco Bicentenario", "Banfoandes", "Confederado", "Central", "Bolívar Banco"]},
+    {"bankCode": "0175", "acronym": "BDT", "shortName": "Banco Digital de los Trabajadores", "fullName": "Banco Digital de los Trabajadores, Banco Universal C.A.", "alternativeNames": ["Banco Bicentenario del Pueblo", "Banco Bicentenario", "Banfoandes", "Confederado", "Bolívar Banco"]},
     {"bankCode": "0177", "acronym": "BANFANB", "shortName": "BANFANB", "fullName": "Banco de la Fuerza Armada Nacional Bolivariana, Banco Universal, C.A.", "alternativeNames": []},
     {"bankCode": "0178", "acronym": "N58", "shortName": "N58 Banco Digital", "fullName": "N58 Banco Digital, S.A. Banco Microfinanciero", "alternativeNames": []},
     {"bankCode": "0191", "acronym": "BNC", "shortName": "BNC", "fullName": "Banco Nacional de Crédito, C.A. Banco Universal", "alternativeNames": ["BOD", "Banco Occidental de Descuento", "Stanford Bank"]},
@@ -66,7 +66,7 @@ def normalize_text(text: str) -> str:
 # ---------------------------------------------------------------------------
 
 VZLA_PHONE = re.compile(r"0(412|414|416|424|426)[\s-]?\d{7}")
-MASKED_PHONE = re.compile(r"0\d{1,3}\*[*\s-]*\d{0,4}")
+MASKED_PHONE = re.compile(r'0\d{1,3}\*[*\s")|-]*\d{0,4}')
 LOOSE_PHONE = re.compile(
     r"0(?:412|414|416|424|426)[\s.,/-]*\d[\s.,/-]*\d[\s.,/-]*\d[\s.,/-]*\d[\s.,/-]*\d[\s.,/-]*\d[\s.,/-]*\d"
 )
@@ -126,6 +126,9 @@ def find_value_near_label(
                 if idx >= len(lines):
                     break
                 candidate = get_clean_value(lines[idx])
+                # Stop scanning if we hit a known field label boundary
+                if fuzzy_match_label(candidate, ALL_FIELD_LABELS):
+                    break
                 if value_pattern:
                     m = value_pattern.search(candidate)
                     if m:
@@ -218,6 +221,8 @@ def parse_vzla_date(text: str) -> str | None:
 
 def match_bank(text: str) -> str | None:
     normalized = normalize_text(text)
+
+    # First pass: standard substring matching
     for bank in VENEZUELAN_BANKS:
         candidates = [bank["shortName"], bank["fullName"], bank["acronym"]] + bank["alternativeNames"]
         for candidate in candidates:
@@ -225,6 +230,17 @@ def match_bank(text: str) -> str | None:
                 return bank["shortName"]
         if normalize_text(bank["bankCode"]) in normalized:
             return bank["shortName"]
+
+    # Second pass: tight matching (spaceless) for OCR concatenation artifacts
+    # e.g. "BancoFondoComun" should match "Banco Fondo Común"
+    tight_input = normalized.replace(" ", "")
+    for bank in VENEZUELAN_BANKS:
+        candidates = [bank["shortName"], bank["fullName"], bank["acronym"]] + bank["alternativeNames"]
+        for candidate in candidates:
+            tight_candidate = normalize_text(candidate).replace(" ", "")
+            if tight_candidate in tight_input:
+                return bank["shortName"]
+
     return None
 
 
@@ -286,10 +302,22 @@ ORIGIN_PHONE_LABELS = [
 
 ORIGIN_BANK_LABELS = ["banco emisor", "banco origen", "banco de origen"]
 
+DEBITED_ACCOUNT_LABELS = [
+    "cuenta debitada", "cuenta debitada:",
+    "cuenta a debitar", "cuenta a debitar:",
+]
+
 CONCEPT_LABELS = [
     "concepto", "concepto:", "concepte:", "descripción",
     "descripción:", "motivo", "detalle",
 ]
+
+ALL_FIELD_LABELS = list(set(
+    REF_LABELS + AMOUNT_LABELS + DATE_LABELS + DEST_PHONE_LABELS +
+    DEST_CEDULA_LABELS + DEST_BANK_LABELS + ORIGIN_PHONE_LABELS +
+    ORIGIN_BANK_LABELS + DEBITED_ACCOUNT_LABELS + CONCEPT_LABELS +
+    BENEFICIARY_LABELS
+))
 
 # ---------------------------------------------------------------------------
 # Receipt scorer
@@ -476,13 +504,12 @@ def extract_all_fields(lines: list[str]) -> ExtractionResult:
     # Compound beneficiary fallback
     if not (dest_phone and dest_cedula and result.destination_bank):
         compound_parts = []
+        found_beneficiary = False
         for line in lines:
             if fuzzy_match_label(line, BENEFICIARY_LABELS):
+                found_beneficiary = True
                 continue
-            if len(compound_parts) > 0 or any(
-                fuzzy_match_label(prev, BENEFICIARY_LABELS)
-                for prev in lines[max(0, lines.index(line) - 2): lines.index(line)]
-            ):
+            if found_beneficiary:
                 if line.strip():
                     compound_parts.append(line.strip())
                 if len(compound_parts) >= 4:
@@ -539,9 +566,9 @@ def extract_all_fields(lines: list[str]) -> ExtractionResult:
                         break
 
     # Origin phone
-    origin_phone = find_value_near_label(lines, ORIGIN_PHONE_LABELS, VZLA_PHONE)
+    origin_phone = find_value_near_label(lines, ORIGIN_PHONE_LABELS, VZLA_PHONE, max_distance=2)
     if not origin_phone:
-        origin_phone = find_value_near_label(lines, ORIGIN_PHONE_LABELS, MASKED_PHONE)
+        origin_phone = find_value_near_label(lines, ORIGIN_PHONE_LABELS, MASKED_PHONE, max_distance=2)
     result.origin_phone = origin_phone
 
     # Origin bank
@@ -559,6 +586,25 @@ def extract_all_fields(lines: list[str]) -> ExtractionResult:
                 result.origin_phone = phone
             else:
                 result.origin_bank = match_bank(orig_value)
+
+    if not result.origin_bank:
+        debited_value = find_value_near_label(lines, DEBITED_ACCOUNT_LABELS)
+        if debited_value:
+            origin_bank = match_bank(debited_value)
+            if origin_bank:
+                result.origin_bank = origin_bank
+
+    if not result.origin_bank:
+        tpago_count = len(re.findall(r"tpago", normalize_text(" ".join(lines))))
+        if tpago_count >= 2:
+            result.origin_bank = "Mercantil"
+
+    if not result.origin_bank:
+        for line in lines:
+            origin_bank = match_bank(line)
+            if origin_bank:
+                result.origin_bank = origin_bank
+                break
 
     # Concept
     concept = find_value_near_label(lines, CONCEPT_LABELS)

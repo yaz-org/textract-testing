@@ -11,6 +11,7 @@ import {
   DEST_PHONE_LABELS,
   extractCedula,
   extractPhone,
+  isTpagoReceipt,
   extractPhoneDigitsOnly,
   extractPhoneLoose,
   findValueNearLabel,
@@ -20,6 +21,7 @@ import {
   MASKED_PHONE,
   matchBank,
   ORIGIN_BANK_LABELS,
+  DEBITED_ACCOUNT_LABELS,
   ORIGIN_PHONE_LABELS,
   parseVzlaAmount,
   parseVzlaDate,
@@ -167,12 +169,13 @@ export function extractDocTRPayment(allLines: string[]): PagoMovilPayment {
 
   if (!destinationPhone || !destinationCedula || !destinationBank) {
     const compoundParts: string[] = [];
+    let foundBeneficiary = false;
     for (let i = 0; i < allLines.length; i++) {
-      const isBeneficiary =
-          fuzzyMatchLabel(allLines[i], BENEFICIARY_LABELS) ||
-          (i > 0 && fuzzyMatchLabel(allLines[i - 1], BENEFICIARY_LABELS)) ||
-          (i > 1 && fuzzyMatchLabel(allLines[i - 2], BENEFICIARY_LABELS));
-      if (isBeneficiary && !fuzzyMatchLabel(allLines[i], BENEFICIARY_LABELS)) {
+      if (fuzzyMatchLabel(allLines[i], BENEFICIARY_LABELS)) {
+        foundBeneficiary = true;
+        continue;
+      }
+      if (foundBeneficiary) {
         const line = allLines[i].trim();
         if (line.length > 0) compoundParts.push(line);
         if (compoundParts.length >= 4) break;
@@ -243,9 +246,9 @@ export function extractDocTRPayment(allLines: string[]): PagoMovilPayment {
     }
   }
 
-  let originPhone = findValueNearLabel(allLines, ORIGIN_PHONE_LABELS, VZLA_PHONE) ?? undefined;
+  let originPhone = findValueNearLabel(allLines, ORIGIN_PHONE_LABELS, VZLA_PHONE, 2) ?? undefined;
   if (!originPhone) {
-    originPhone = findValueNearLabel(allLines, ORIGIN_PHONE_LABELS, MASKED_PHONE) ?? undefined;
+    originPhone = findValueNearLabel(allLines, ORIGIN_PHONE_LABELS, MASKED_PHONE, 2) ?? undefined;
   }
 
   let originBank: string | undefined;
@@ -263,6 +266,28 @@ export function extractDocTRPayment(allLines: string[]): PagoMovilPayment {
         originPhone = phone;
       } else {
         originBank = matchBank(origValue) ?? undefined;
+      }
+    }
+  }
+
+  if (!originBank) {
+    const debitedValue = findValueNearLabel(allLines, DEBITED_ACCOUNT_LABELS);
+    if (debitedValue) {
+      const bank = matchBank(debitedValue);
+      if (bank) originBank = bank;
+    }
+  }
+
+  if (!originBank && isTpagoReceipt(allLines)) {
+    originBank = "0105";
+  }
+
+  if (!originBank) {
+    for (const line of allLines) {
+      const bank = matchBank(line);
+      if (bank) {
+        originBank = bank;
+        break;
       }
     }
   }
