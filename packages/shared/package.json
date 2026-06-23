@@ -6,10 +6,14 @@
   "scripts": {},
   "dependencies": {
     "@aws-sdk/client-dynamodb": "*",
+    "@aws-sdk/client-s3": "*",
     "@aws-sdk/lib-dynamodb": "*",
+    "@aws-sdk/s3-request-presigner": "*",
+    "archiver": "^8.0.0",
     "sst": "*"
   },
   "devDependencies": {
+    "@types/archiver": "^8.0.0",
     "@types/node": "^22",
     "typescript": "^6.0.2"
   }

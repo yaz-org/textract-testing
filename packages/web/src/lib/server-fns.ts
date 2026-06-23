@@ -7,7 +7,6 @@ import {
 	createUploadUrls,
 	deleteDocuments,
 	deleteDocumentsSchema,
-	exportDocumentsZip,
 	finalizeUploadSchema,
 	getDocument,
 	getPresignedUrl,
@@ -15,6 +14,7 @@ import {
 	saveDocumentRecord,
 	uploadRequestSchema,
 } from "./documents";
+import { exportDocumentsZip } from "@textract-testing/shared";
 
 const sqs = new SQSClient({});
 
