@@ -74,13 +74,21 @@ export const INTL_PHONE = /5841[246]\d{7}/;
 export const CEDULA_PREFIXED = /[VEJG]\s*[-]?\s*(?:\d{1,3}\.)*\d{3,}/i;
 export const VZLA_AMOUNT = /(?:Bs?\.?\s*)?((?:\d{1,3}\.\d{3}[,]\d{2})|\d{3,}[,]\d{2})(?:\s*Bs)?/i;
 export const EMBEDDED_AMOUNT = /(?:Realizaste\s+(?:un\s+)?(?:Pago\s+Móvil|transacción)\s+de\s+Bs\.?\s*)((?:\d{1,3}\.\d{3}[,]\d{2})|\d{3,}[,]\d{2})/i;
-export const DATE_PATTERN = /\d{1,2}\/\d{1,2}\/\d{2,4}/;
+export const DATE_PATTERN = /\d{1,2}[-/]\d{1,2}[-/]\d{2,4}/;
+export const ALPHA_DATE_PATTERN = /(\d{1,2})\s+(ene|feb|mar|abr|may|jun|jul|ago|sep|oct|nov|dic)\s+(\d{2,4})/i;
+export const ALPHA_MONTH_MAP: Record<string, number> = {
+  ene: 1, feb: 2, mar: 3, abr: 4, may: 5, jun: 6,
+  jul: 7, ago: 8, sep: 9, oct: 10, nov: 11, dic: 12,
+};
 export const TIME_PATTERN = /\d{1,2}:\d{2}(?::\d{2})?\s*(AM|PM|am|pm)?/;
 export const BANK_CODE_PREFIX = /^\d{4}\s*[-:.]?\s*/;
 
 export function extractPhone(text: string): string | null {
   const m = text.match(VZLA_PHONE);
-  if (m) return m[0];
+  if (m) {
+    const digits = m[0].replace(/[^\d]/g, "");
+    return `${digits.slice(0, 4)}-${digits.slice(4)}`;
+  }
   const mm = text.match(MASKED_PHONE);
   if (mm) return mm[0];
   return null;
@@ -129,23 +137,43 @@ export function parseVzlaAmount(text: string): { text: string; value: number } |
 
 export function parseVzlaDate(text: string): string | undefined {
   const dateMatch = text.match(DATE_PATTERN);
-  if (!dateMatch) return undefined;
-  const raw = dateMatch[0];
-  const parts = raw.split("/");
-  const day = Number.parseInt(parts[0], 10);
-  const month = Number.parseInt(parts[1], 10) - 1;
-  let year = Number.parseInt(parts[2], 10);
-  if (year < 100) year += 2000;
-  if (Number.isNaN(day) || Number.isNaN(month) || Number.isNaN(year)) return undefined;
+  if (dateMatch) {
+    const raw = dateMatch[0];
+    const parts = raw.split(/[-/]/);
+    const day = Number.parseInt(parts[0], 10);
+    const month = Number.parseInt(parts[1], 10) - 1;
+    let year = Number.parseInt(parts[2], 10);
+    if (year < 100) year += 2000;
+    if (Number.isNaN(day) || Number.isNaN(month) || Number.isNaN(year)) return undefined;
 
-  const date = new Date(year, month, day);
+    const date = new Date(year, month, day);
 
-  const timeMatch = text.match(TIME_PATTERN);
-  if (timeMatch) {
-    return `${date.toISOString().split("T")[0]}T${timeMatch[0]}`;
+    const timeMatch = text.match(TIME_PATTERN);
+    if (timeMatch) {
+      return `${date.toISOString().split("T")[0]}T${timeMatch[0]}`;
+    }
+
+    return date.toISOString().split("T")[0];
   }
 
-  return date.toISOString().split("T")[0];
+  const alphaMatch = text.match(ALPHA_DATE_PATTERN);
+  if (alphaMatch) {
+    const day = Number.parseInt(alphaMatch[1], 10);
+    const month = ALPHA_MONTH_MAP[alphaMatch[2].toLowerCase()] - 1;
+    let year = Number.parseInt(alphaMatch[3], 10);
+    if (year < 100) year += 2000;
+
+    const date = new Date(year, month, day);
+
+    const timeMatch = text.match(TIME_PATTERN);
+    if (timeMatch) {
+      return `${date.toISOString().split("T")[0]}T${timeMatch[0]}`;
+    }
+
+    return date.toISOString().split("T")[0];
+  }
+
+  return undefined;
 }
 
 export function matchBank(text: string): string | null {
@@ -215,7 +243,8 @@ export const DEST_PHONE_LABELS = [
   "numero celular de destino", "numero de celular de destino",
   "telf beneficiario", "telf beneficiario:", "beneficiario", "beneficiario:",
   "destino", "destino:", "número de teléfono", "numero de telefono",
-  "número de teléfono:",
+  "número de teléfono:", "número celular", "numero celular",
+  "número celular:", "numero celular:",
 ];
 
 export const DEST_CEDULA_LABELS = [

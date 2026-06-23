@@ -102,7 +102,7 @@ export function DocumentsTable({
 	}
 
 	const selectedCount = Object.keys(rowSelection).length;
-	const hasExtractedResults = data.some((doc) => doc.textractResult);
+	const hasExtractedResults = data.some((doc) => doc.paymentResult);
 
 	return (
 		<div className="flex h-full min-h-0 flex-col gap-6 rounded-xl border bg-card py-6 shadow-sm">

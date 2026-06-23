@@ -245,7 +245,7 @@ export function PreviewDialog({
                               <>
                                 <p>Pages: {(inf.raw as DocTRRawInference).pages ?? "—"}</p>
                                 <p>Lines: {(inf.raw as DocTRRawInference).lines ?? "—"}</p>
-                                <p>Confidence: {((inf.raw as DocTRRawInference).averageConfidence ?? 1 * 100).toFixed(1)}%</p>
+                                <p>Confidence: {((inf.raw as DocTRRawInference).averageConfidence ?? 100).toFixed(4)}%</p>
                                 <p>Inference time: {(inf.raw as DocTRRawInference).inferenceTimeMs ?? "—"}ms</p>
                                 <details className="relative">
                                   <summary

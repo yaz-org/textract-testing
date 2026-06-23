@@ -98,6 +98,10 @@ export function extractDocTRPayment(allLines: string[]): PagoMovilPayment {
   }
 
   let destinationPhone = findValueNearLabel(allLines, DEST_PHONE_LABELS, VZLA_PHONE);
+  if (destinationPhone) {
+    const digits = destinationPhone.replace(/[^\d]/g, "");
+    destinationPhone = `${digits.slice(0, 4)}-${digits.slice(4)}`;
+  }
   if (!destinationPhone) {
     destinationPhone = findValueNearLabel(allLines, DEST_PHONE_LABELS, MASKED_PHONE);
   }
@@ -207,7 +211,7 @@ export function extractDocTRPayment(allLines: string[]): PagoMovilPayment {
 
   if (!destinationPhone) {
     const allText = allLines.join(" ");
-    const hasPhone = VZLA_PHONE.test(allText) || MASKED_PHONE.test(allText) || LOOSE_PHONE.test(allText) || INTL_PHONE.test(allText);
+    const hasPhone = VZLA_PHONE.test(allText) || MASKED_PHONE.test(allText) || LOOSE_PHONE.test(allText) || INTL_PHONE.test(allText) || !!extractPhoneDigitsOnly(allText);
     if (hasPhone) {
       for (const line of allLines) {
         const phone = extractPhone(line);
@@ -247,6 +251,10 @@ export function extractDocTRPayment(allLines: string[]): PagoMovilPayment {
   }
 
   let originPhone = findValueNearLabel(allLines, ORIGIN_PHONE_LABELS, VZLA_PHONE, 2) ?? undefined;
+  if (originPhone) {
+    const digits = originPhone.replace(/[^\d]/g, "");
+    originPhone = `${digits.slice(0, 4)}-${digits.slice(4)}`;
+  }
   if (!originPhone) {
     originPhone = findValueNearLabel(allLines, ORIGIN_PHONE_LABELS, MASKED_PHONE, 2) ?? undefined;
   }

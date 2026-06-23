@@ -15,6 +15,13 @@ import {
 } from "#/lib/server-fns";
 
 export const Route = createFileRoute("/documents")({
+	loader: ({ context }) => {
+		context.queryClient.prefetchQuery({
+			queryKey: ["documents"],
+			queryFn: () => getDocuments(),
+			staleTime: 30 * 60 * 1000,
+		});
+	},
 	component: DocumentsPage,
 });
 
@@ -111,14 +118,14 @@ function DocumentsPage() {
 		},
 	});
 
-	const exportZipMutation = useMutation<{ presignedUrl: string }, Error>({
+	const exportZipMutation = useMutation({
 		mutationFn: () => exportDocumentsAsZip(),
-		onSuccess: ({ presignedUrl }) => {
+		onSuccess: ({ presignedUrl, docSize }) => {
 			const a = document.createElement("a");
 			a.href = presignedUrl;
 			a.download = "documents-export.zip";
 			a.click();
-			toast.success("Download started.");
+			toast.success(`Download started. Docs: ${docSize}`);
 		},
 		onError: (caught) => {
 			setError(caught instanceof Error ? caught.message : "Export failed.");

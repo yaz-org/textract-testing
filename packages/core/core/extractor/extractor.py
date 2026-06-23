@@ -77,7 +77,15 @@ EMBEDDED_AMOUNT = re.compile(
     r"(?:Realizaste\s+(?:un\s+)?(?:Pago\s+Móvil|transacción)\s+de\s+Bs\.?\s*)((?:\d{1,3}\.\d{3}[,]\d{2})|\d{3,}[,]\d{2})",
     re.IGNORECASE,
 )
-DATE_PATTERN = re.compile(r"\d{1,2}/\d{1,2}/\d{2,4}")
+DATE_PATTERN = re.compile(r"\d{1,2}[-/]\d{1,2}[-/]\d{2,4}")
+ALPHA_DATE_PATTERN = re.compile(
+    r"(\d{1,2})\s+(ene|feb|mar|abr|may|jun|jul|ago|sep|oct|nov|dic)\s+(\d{2,4})",
+    re.IGNORECASE,
+)
+ALPHA_MONTH_MAP = {
+    "ene": 1, "feb": 2, "mar": 3, "abr": 4, "may": 5, "jun": 6,
+    "jul": 7, "ago": 8, "sep": 9, "oct": 10, "nov": 11, "dic": 12,
+}
 TIME_PATTERN = re.compile(r"\d{1,2}:\d{2}(?::\d{2})?\s*(AM|PM|am|pm)?")
 BANK_CODE_PREFIX = re.compile(r"^\d{4}\s*[-:.]?\s*")
 
@@ -141,7 +149,8 @@ def find_value_near_label(
 def extract_phone(text: str) -> str | None:
     m = VZLA_PHONE.search(text)
     if m:
-        return m.group(0)
+        digits = re.sub(r"[^\d]", "", m.group(0))
+        return f"{digits[:4]}-{digits[4:]}"
     m = MASKED_PHONE.search(text)
     if m:
         return m.group(0)
@@ -199,24 +208,42 @@ def extract_amount_value(text: str) -> tuple[str, float] | None:
 
 def parse_vzla_date(text: str) -> str | None:
     date_match = DATE_PATTERN.search(text)
-    if not date_match:
-        return None
-    raw = date_match.group(0)
-    parts = raw.split("/")
-    day = int(parts[0])
-    month = int(parts[1]) - 1
-    year = int(parts[2])
-    if year < 100:
-        year += 2000
-    try:
-        date = datetime(year, month + 1, day)
-    except ValueError:
-        return None
-    time_match = TIME_PATTERN.search(text)
-    if time_match:
-        time_str = time_match.group(0)
-        return f"{date.strftime('%Y-%m-%d')}T{time_str}"
-    return date.strftime("%Y-%m-%d")
+    if date_match:
+        raw = date_match.group(0)
+        parts = re.split(r"[-/]", raw)
+        day = int(parts[0])
+        month = int(parts[1])
+        year = int(parts[2])
+        if year < 100:
+            year += 2000
+        try:
+            date = datetime(year, month, day)
+        except ValueError:
+            return None
+        time_match = TIME_PATTERN.search(text)
+        if time_match:
+            time_str = time_match.group(0)
+            return f"{date.strftime('%Y-%m-%d')}T{time_str}"
+        return date.strftime("%Y-%m-%d")
+
+    alpha_match = ALPHA_DATE_PATTERN.search(text)
+    if alpha_match:
+        day = int(alpha_match.group(1))
+        month = ALPHA_MONTH_MAP[alpha_match.group(2).lower()]
+        year = int(alpha_match.group(3))
+        if year < 100:
+            year += 2000
+        try:
+            date = datetime(year, month, day)
+        except ValueError:
+            return None
+        time_match = TIME_PATTERN.search(text)
+        if time_match:
+            time_str = time_match.group(0)
+            return f"{date.strftime('%Y-%m-%d')}T{time_str}"
+        return date.strftime("%Y-%m-%d")
+
+    return None
 
 
 def match_bank(text: str) -> str | None:
@@ -227,9 +254,9 @@ def match_bank(text: str) -> str | None:
         candidates = [bank["shortName"], bank["fullName"], bank["acronym"]] + bank["alternativeNames"]
         for candidate in candidates:
             if normalize_text(candidate) in normalized:
-                return bank["shortName"]
+                return bank["bankCode"]
         if normalize_text(bank["bankCode"]) in normalized:
-            return bank["shortName"]
+            return bank["bankCode"]
 
     # Second pass: tight matching (spaceless) for OCR concatenation artifacts
     # e.g. "BancoFondoComun" should match "Banco Fondo Común"
@@ -239,7 +266,7 @@ def match_bank(text: str) -> str | None:
         for candidate in candidates:
             tight_candidate = normalize_text(candidate).replace(" ", "")
             if tight_candidate in tight_input:
-                return bank["shortName"]
+                return bank["bankCode"]
 
     return None
 
@@ -273,7 +300,8 @@ DEST_PHONE_LABELS = [
     "numero celular de destino", "numero de celular de destino",
     "telf beneficiario", "telf beneficiario:", "beneficiario", "beneficiario:",
     "destino", "destino:", "número de teléfono", "numero de telefono",
-    "número de teléfono:",
+    "número de teléfono:", "número celular", "numero celular",
+    "número celular:", "numero celular:",
 ]
 
 DEST_CEDULA_LABELS = [
@@ -452,6 +480,9 @@ def extract_all_fields(lines: list[str]) -> ExtractionResult:
 
     # Destination phone
     dest_phone = find_value_near_label(lines, DEST_PHONE_LABELS, VZLA_PHONE)
+    if dest_phone:
+        digits = re.sub(r"[^\d]", "", dest_phone)
+        dest_phone = f"{digits[:4]}-{digits[4:]}"
     if not dest_phone:
         dest_phone = find_value_near_label(lines, DEST_PHONE_LABELS, MASKED_PHONE)
     if not dest_phone:
@@ -567,6 +598,9 @@ def extract_all_fields(lines: list[str]) -> ExtractionResult:
 
     # Origin phone
     origin_phone = find_value_near_label(lines, ORIGIN_PHONE_LABELS, VZLA_PHONE, max_distance=2)
+    if origin_phone:
+        digits = re.sub(r"[^\d]", "", origin_phone)
+        origin_phone = f"{digits[:4]}-{digits[4:]}"
     if not origin_phone:
         origin_phone = find_value_near_label(lines, ORIGIN_PHONE_LABELS, MASKED_PHONE, max_distance=2)
     result.origin_phone = origin_phone

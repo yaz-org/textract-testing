@@ -304,12 +304,14 @@ export async function deleteDocuments(
 	return { success: true };
 }
 
-export async function exportDocumentsZip(): Promise<{ presignedUrl: string }> {
+export async function exportDocumentsZip(): Promise<{ presignedUrl: string, docSize: number }> {
 	const documents = await listDocuments();
 
 	const docsWithResults = documents.filter(
-		(doc) => doc.textractResult !== undefined || doc.doctrResult !== undefined,
+		(doc) => doc.paymentResult,
 	);
+
+  console.log(`Exporting ${docsWithResults.length} documents with results out of ${documents.length} total documents.`);
 
 	const archive = new ZipArchive({ zlib: { level: 9 } });
 	const chunks: Buffer[] = [];
@@ -322,11 +324,9 @@ export async function exportDocumentsZip(): Promise<{ presignedUrl: string }> {
 				{
 					fileName: doc.fileName,
 					fileSize: doc.size,
+          s3Key: doc.s3Key,
 					paymentResult: doc.paymentResult ?? null,
-					textractResult: doc.textractResult ?? null,
-					textractExtractedAt: doc.textractExtractedAt ?? null,
-					doctrResult: doc.doctrResult ?? null,
-					doctrExtractedAt: doc.doctrExtractedAt ?? null,
+          inferenceHistory: doc.inferenceHistory ?? null,
 				},
 				null,
 				2,
@@ -358,7 +358,7 @@ export async function exportDocumentsZip(): Promise<{ presignedUrl: string }> {
 		{ expiresIn: 3600 },
 	);
 
-	return { presignedUrl };
+	return { presignedUrl, docSize: docsWithResults.length };
 }
 
 

@@ -44,7 +44,7 @@ describe("docTR pago móvil extraction (line-based)", () => {
 			assertValid(payment);
 			expect(payment.referenceNumber).toBe("060451758194");
 			expect(payment.amountValue).toBe(3171.2);
-			expect(payment.destinationPhone).toBe("04143297358");
+			expect(payment.destinationPhone).toBe("0414-3297358");
 			expect(payment.destinationCedula).toBe("E-82078228");
 			expect(payment.originBank).toBe("0134");
 			expect(payment.destinationBank).toBe("0105");
@@ -58,7 +58,7 @@ describe("docTR pago móvil extraction (line-based)", () => {
 			assertValid(payment);
 			expect(payment.referenceNumber).toBeTruthy();
 			expect(payment.amountValue).toBeGreaterThan(0);
-			expect(payment.destinationPhone).toBe("04143297358");
+			expect(payment.destinationPhone).toBe("0414-3297358");
 			expect(payment.destinationCedula).toBe("E-82078228");
 			expect(payment.destinationBank).toBe("0105");
 		});
@@ -180,7 +180,7 @@ describe("docTR pago móvil extraction (line-based)", () => {
 			assertValid(payment);
 			expect(payment.referenceNumber).toBe("000000454592");
 			expect(payment.amountValue).toBe(3171.2);
-			expect(payment.destinationPhone).toBe("04143297358");
+			expect(payment.destinationPhone).toBe("0414-3297358");
 		});
 	});
 
@@ -192,7 +192,7 @@ describe("docTR pago móvil extraction (line-based)", () => {
 			assertValid(payment);
 			expect(payment.referenceNumber).toBe("110441237391");
 			expect(payment.amountValue).toBe(2505.0);
-			expect(payment.destinationPhone).toBe("04143297358");
+			expect(payment.destinationPhone).toBe("0414-3297358");
 			expect(payment.destinationCedula).toBe("E-82078228");
 			expect(payment.destinationBank).toBe("0105");
 			expect(payment.concept).toBe("fubol italo");
@@ -205,7 +205,7 @@ describe("docTR pago móvil extraction (line-based)", () => {
 			assertValid(payment);
 			expect(payment.referenceNumber).toBe("123321953221");
 			expect(payment.amountValue).toBe(3409.0);
-			expect(payment.destinationPhone).toBe("04143297358");
+			expect(payment.destinationPhone).toBe("0414-3297358");
 			expect(payment.destinationCedula).toBe("E-82078228");
 			expect(payment.destinationBank).toBe("0105");
 			expect(payment.concept).toBe("nicolas");
@@ -220,7 +220,7 @@ describe("docTR pago móvil extraction (line-based)", () => {
 			assertValid(payment);
 			expect(payment.referenceNumber).toBe("005411617229");
 			expect(payment.amountValue).toBe(3500.0);
-			expect(payment.destinationPhone).toBe("04127965701");
+			expect(payment.destinationPhone).toBe("0412-7965701");
 			expect(payment.destinationBank).toBe("0134");
 			expect(payment.concept).toBe("pago");
 			expect(payment.destinationCedula).toBe("31031988");
@@ -233,7 +233,7 @@ describe("docTR pago móvil extraction (line-based)", () => {
 			assertValid(payment);
 			expect(payment.referenceNumber).toBe("005656589442");
 			expect(payment.amountValue).toBe(5194.0);
-			expect(payment.destinationPhone).toBe("04143297358");
+			expect(payment.destinationPhone).toBe("0414-3297358");
 			expect(payment.destinationCedula).toBe("82078228");
 			expect(payment.destinationBank).toBe("0105");
 			expect(payment.concept).toBe("pago");
@@ -256,7 +256,7 @@ describe("docTR pago móvil extraction (line-based)", () => {
 				"0105 - BANCO MERCANTIL",
 			]);
 			expect(payment.originPhone).toBeUndefined();
-			expect(payment.destinationPhone).toBe("04143290785");
+			expect(payment.destinationPhone).toBe("0414-3290785");
 		});
 
 		test("extracts origin phone from BDV with OCR noise in Origen value", () => {
@@ -277,7 +277,7 @@ describe("docTR pago móvil extraction (line-based)", () => {
 				"0105 - BANCO MERCANTIL",
 			]);
 			expect(payment.originPhone).toBeTruthy();
-			expect(payment.destinationPhone).toBe("04143290785");
+			expect(payment.destinationPhone).toBe("0414-3290785");
 		});
 	});
 
@@ -289,7 +289,7 @@ describe("docTR pago móvil extraction (line-based)", () => {
 			assertValid(payment);
 			expect(payment.referenceNumber).toBe("52166452");
 			expect(payment.amountValue).toBe(3061.01);
-			expect(payment.destinationPhone).toBe("04143297358");
+			expect(payment.destinationPhone).toBe("0414-3297358");
 			expect(payment.destinationCedula).toBe("E-82078228");
 			expect(payment.originBank).toBe("0151");
 			expect(payment.destinationBank).toBe("0105");
@@ -303,7 +303,7 @@ describe("docTR pago móvil extraction (line-based)", () => {
 			assertValid(payment);
 			expect(payment.referenceNumber).toBe("95562595");
 			expect(payment.amountValue).toBe(4439.0);
-			expect(payment.destinationPhone).toBe("04143297358");
+			expect(payment.destinationPhone).toBe("0414-3297358");
 			expect(payment.destinationCedula).toBe("E-82078228");
 			expect(payment.originBank).toBe("0151");
 			expect(payment.destinationBank).toBe("0105");
