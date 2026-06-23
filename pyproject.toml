@@ -3,4 +3,5 @@ members = [
     "packages/core",
     "packages/scripts",
     "packages/doctr-lambda",
+    "packages/onnxtr-lambda",
 ]

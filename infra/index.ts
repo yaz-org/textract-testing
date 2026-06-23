@@ -1,4 +1,5 @@
 export * from "./storage"
 export * from "./doctr"
+export * from "./onnxtr"
 export * from "./queue"
 export * from "./web"

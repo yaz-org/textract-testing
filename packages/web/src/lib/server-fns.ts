@@ -1,5 +1,6 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
+import { InvokeCommand, LambdaClient } from "@aws-sdk/client-lambda";
 import { SQSClient, SendMessageCommand } from "@aws-sdk/client-sqs";
 import { Resource } from "sst";
 import type { UploadUrlResult } from "./documents";
@@ -17,6 +18,7 @@ import {
 import { exportDocumentsZip } from "./documents";
 
 const sqs = new SQSClient({});
+const lambda = new LambdaClient({});
 
 export const getDocuments = createServerFn({ method: "GET" }).handler(
 	async () => {
@@ -89,6 +91,31 @@ export const reprocessPayment = createServerFn({ method: "POST" })
 		);
 		return { success: true as const };
 	});
+
+export const runOnnxrtInference = createServerFn({ method: "POST" })
+  .validator(z.object({ documentId: z.string().uuid() }))
+  .handler(async ({ data }) => {
+    const doc = await getDocument(data.documentId);
+    if (!doc) {
+      throw new Error("No document found");
+    }
+
+    const command = new InvokeCommand({
+      FunctionName: Resource.OnnxTRFunction.name,
+      Payload: JSON.stringify({ s3Key: doc.s3Key }),
+    });
+
+    const response = await lambda.send(command);
+    const payload = JSON.parse(
+      new TextDecoder().decode(response.Payload),
+    );
+
+    if (response.FunctionError) {
+      throw new Error(`OnnxTR error: ${JSON.stringify(payload)}`);
+    }
+
+    return payload;
+  });
 
 export const exportDocumentsAsZip = createServerFn({ method: "POST" })
 .handler(async () => {

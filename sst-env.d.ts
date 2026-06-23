@@ -30,6 +30,10 @@ declare module "sst" {
       "name": string
       "type": "sst.aws.Dynamo"
     }
+    "OnnxTRFunction": {
+      "name": string
+      "type": "sst.aws.Function"
+    }
     "Web": {
       "type": "sst.aws.TanstackStart"
       "url": string

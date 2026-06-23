@@ -25,6 +25,9 @@ class Resource:
     class HashLockTable:
         name: str
         type: str
+    class OnnxTRFunction:
+        name: str
+        type: str
     class Web:
         type: str
         url: str

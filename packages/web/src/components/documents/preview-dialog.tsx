@@ -6,7 +6,7 @@ import {TableBody, TableCell, TableHead, TableHeader, TableRow,} from "#/compone
 import {Button} from "#/components/ui/button.tsx";
 import {formatBytes, formatDate} from "#/lib/format";
 import {toast} from "sonner";
-import {reprocessPayment} from "#/lib/server-fns";
+import {reprocessPayment, runOnnxrtInference} from "#/lib/server-fns";
 import {_BANKS} from "#/lib/banks";
 import type {DocumentRow} from "./columns";
 import type {DocTRRawInference} from "#/lib/payment";
@@ -82,6 +82,18 @@ export function PreviewDialog({
     }
   });
 
+  const onnxrtMutation = useMutation({
+    mutationFn: (input: { documentId: string }) => runOnnxrtInference({data: input}),
+    onSuccess: async (res) => {
+      console.log("OnnxTR success", res);
+      toast.success("OnnxTR inference complete");
+    },
+    onError: (error) => {
+      console.log("OnnxTR error", error);
+      toast.error(error instanceof Error ? error.message : "OnnxTR inference failed.");
+    }
+  });
+
   return (
       <Dialog open={open} onOpenChange={onOpenChange}>
         <DialogTrigger/>
@@ -140,6 +152,26 @@ export function PreviewDialog({
                       )}
                       Process again
                     </Button>
+                    <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="w-full gap-1.5"
+                        onClick={() => onnxrtMutation.mutate({documentId: previewDocument.documentId})}
+                        disabled={onnxrtMutation.isPending}
+                    >
+                      {onnxrtMutation.isPending ? (
+                          <Loader2 className="size-4 animate-spin"/>
+                      ) : (
+                          <ScanText className="size-4"/>
+                      )}
+                      Run OnnxTR
+                    </Button>
+                    {onnxrtMutation.data && (
+                        <pre className="max-h-48 overflow-auto rounded bg-slate-50 p-2 text-xs font-mono whitespace-pre-wrap">
+                          {JSON.stringify(onnxrtMutation.data, null, 2)}
+                        </pre>
+                    )}
                     <div className="space-y-1 text-sm">
                       <p className="text-muted-foreground">Type</p>
                       <p>{previewDocument.contentType}</p>

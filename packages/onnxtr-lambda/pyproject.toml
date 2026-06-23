@@ -1,0 +1,10 @@
+[project]
+name = "onnxtr-lambda"
+version = "0.1.0"
+description = "OnnxTR OCR Lambda for document text extraction"
+requires-python = ">=3.11"
+dependencies = [
+    "onnxtr[cpu-headless]>=0.8",
+    "boto3",
+    "pillow",
+]
