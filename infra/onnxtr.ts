@@ -2,7 +2,7 @@ import { documentsBucket } from "./storage";
 
 export const onnxtrFunction = new sst.aws.Function("OnnxTRFunction", {
 	handler: "packages/onnxtr-lambda/handler.lambda_handler",
-	runtime: "python3.13",
+	runtime: "python3.14",
 	python: { container: true },
 	timeout: "120 seconds",
 	memory: "2048 MB",

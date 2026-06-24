@@ -266,11 +266,12 @@ export function PreviewDialog({
                   <h3 className="font-semibold">Inference History</h3>
                   {previewDocument.inferenceHistory.map((inf, idx) => (
                       <details key={idx} className="rounded-lg border border-slate-200 text-sm">
-                        <summary className="cursor-pointer px-3 py-2 font-medium hover:bg-slate-50">
-                          #{idx + 1} — {inf.inferenceType === "doctr" ? "docTR" : "Textract"}
+                        <summary className="cursor-pointer flex flex-row gap-2 px-3 py-2 font-medium hover:bg-slate-50">
+                          <span>#{idx + 1} — {inf.inferenceType === "doctr" ? "docTR" : "Textract"}</span>
                           {inf.payment?.status === "VALID" && (
                               <span className="ml-2 text-green-600">✓ Parsed</span>
                           )}
+                          <span>{inf.extractedAt}</span>
                         </summary>
                         <div className="border-t border-slate-200 px-3 py-2 space-y-2">
                           {inf.inferenceType === "doctr" && (

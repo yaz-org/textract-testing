@@ -1,5 +1,6 @@
 import { documentsBucket, documentsTable } from "./storage";
 import { doctrFunction } from "./doctr";
+import { onnxtrFunction } from "./onnxtr";
 
 const dlq = new sst.aws.Queue("DocumentDLQ", { fifo: true });
 
@@ -18,11 +19,11 @@ documentQueue.subscribe({
   handler: "packages/functions/src/process-document.handler",
   timeout: "60 seconds",
   memory: "128 MB",
-  link: [documentsBucket, documentsTable, doctrFunction],
+  link: [documentsBucket, documentsTable, doctrFunction, onnxtrFunction],
   permissions: [
     {
       actions: ["lambda:InvokeFunction"],
-      resources: [doctrFunction.arn],
+      resources: [doctrFunction.arn, onnxtrFunction.arn],
     },
   ],
 });

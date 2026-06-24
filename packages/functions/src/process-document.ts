@@ -1,7 +1,7 @@
 import { InvokeCommand, LambdaClient } from "@aws-sdk/client-lambda";
 import { Resource } from "sst";
-import { extractDocTRPayment, saveInference } from "@textract-testing/shared";
-import type { DocTRRawInference, InferenceRecord } from "@textract-testing/shared";
+import { extractDocTRPayment, extractOnnxTRPayment, saveInference } from "@textract-testing/shared";
+import type { DocTRRawInference, OnnxTRRawInference, InferenceRecord } from "@textract-testing/shared";
 
 const lambda = new LambdaClient({});
 
@@ -26,11 +26,16 @@ interface SqsResponse {
 interface ProcessMessage {
   documentId: string;
   s3Key: string;
+  model?: "doctr" | "onnxtr";
 }
 
-async function processDocument(documentId: string, s3Key: string) {
+async function processDocument(documentId: string, s3Key: string, model: "doctr" | "onnxtr" = "onnxtr") {
+  const functionName = model === "doctr"
+    ? Resource.DoctrFunction.name
+    : Resource.OnnxTRFunction.name;
+
   const command = new InvokeCommand({
-    FunctionName: Resource.DoctrFunction.name,
+    FunctionName: functionName,
     Payload: JSON.stringify({
       documentId,
       s3Key,
@@ -46,16 +51,23 @@ async function processDocument(documentId: string, s3Key: string) {
   if (response.FunctionError) {
     console.log("Error", response.FunctionError, payload);
     throw new Error(
-      `DoctrFunction error: ${JSON.stringify(payload)}`,
+      `${model} function error: ${JSON.stringify(payload)}`,
     );
   }
 
-  const rawInference = payload as DocTRRawInference;
+  let rawInference: DocTRRawInference | OnnxTRRawInference;
+  let payment;
 
-  const payment = extractDocTRPayment(rawInference.allLines);
+  if (model === "doctr") {
+    rawInference = payload as DocTRRawInference;
+    payment = extractDocTRPayment(rawInference.allLines);
+  } else {
+    rawInference = payload as OnnxTRRawInference;
+    payment = extractOnnxTRPayment(rawInference);
+  }
 
   const inferenceRecord: InferenceRecord = {
-    inferenceType: "doctr",
+    inferenceType: model,
     extractedAt: rawInference.extractedAt,
     raw: rawInference,
     payment,
@@ -72,7 +84,7 @@ export const handler = async (event: SqsEvent): Promise<SqsResponse> => {
   for (const record of event.Records) {
     try {
       const message: ProcessMessage = JSON.parse(record.body);
-      const { documentId, s3Key } = message;
+      const { documentId, s3Key, model } = message;
 
       if (!documentId || !s3Key) {
         console.error("Missing documentId or s3Key in message", record.body);
@@ -80,7 +92,7 @@ export const handler = async (event: SqsEvent): Promise<SqsResponse> => {
         continue;
       }
 
-      await processDocument(documentId, s3Key);
+      await processDocument(documentId, s3Key, model ?? "onnxtr");
     } catch (error) {
       console.error("Failed to process record", record.messageId, error);
       batchItemFailures.push({ itemIdentifier: record.messageId });
