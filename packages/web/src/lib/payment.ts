@@ -1,9 +1,10 @@
 export type {
-  PagoMovilPayment,
-  DoctrResult,
-  InferenceType,
-  DocTRRawInference,
-  TextractRawInference,
-  RawInference,
-  InferenceRecord,
+	DocTRRawInference,
+	DoctrResult,
+	InferenceRecord,
+	InferenceType,
+	OnnxTRRawInference,
+	PagoMovilPayment,
+	RawInference,
+	TextractRawInference,
 } from "@textract-testing/shared";

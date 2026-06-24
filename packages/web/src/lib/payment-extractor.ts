@@ -1,39 +1,39 @@
 import "@tanstack/react-start/server-only";
 
-import type { PagoMovilPayment } from "./payment";
-import type { TextractResult } from "./textract";
 import {
+	AMOUNT_LABELS,
+	BENEFICIARY_LABELS,
+	CEDULA_PREFIXED,
+	CONCEPT_LABELS,
+	DATE_LABELS,
+	DATE_PATTERN,
+	DEBITED_ACCOUNT_LABELS,
+	DEST_BANK_LABELS,
+	DEST_CEDULA_LABELS,
+	DEST_PHONE_LABELS,
+	EMBEDDED_AMOUNT,
+	extractCedula,
+	extractPhone,
 	findValueNearLabel,
 	fuzzyMatchLabel,
 	getCleanValue,
+	isTpagoReceipt,
+	MASKED_PHONE,
+	matchBank,
 	normalizeText,
+	ORIGIN_BANK_LABELS,
+	ORIGIN_PHONE_LABELS,
+	parseCompoundBeneficiary,
 	parseVzlaAmount,
 	parseVzlaDate,
-	extractPhone,
-	extractCedula,
-	matchBank,
-	stripBankCode,
-	parseCompoundBeneficiary,
-	isTpagoReceipt,
-	VZLA_PHONE,
-	MASKED_PHONE,
-	CEDULA_PREFIXED,
-	VZLA_AMOUNT,
-	EMBEDDED_AMOUNT,
-	DATE_PATTERN,
 	REF_LABELS,
-	AMOUNT_LABELS,
-	DATE_LABELS,
-	DEST_PHONE_LABELS,
-	DEST_CEDULA_LABELS,
-	DEST_BANK_LABELS,
-	BENEFICIARY_LABELS,
-	ORIGIN_PHONE_LABELS,
-	ORIGIN_BANK_LABELS,
-	DEBITED_ACCOUNT_LABELS,
-	CONCEPT_LABELS,
 	SCORE_THRESHOLD,
+	stripBankCode,
+	VZLA_AMOUNT,
+	VZLA_PHONE,
 } from "./extractor-utils";
+import type { PagoMovilPayment } from "./payment";
+import type { TextractResult } from "./textract";
 
 function extractFieldFromForms<T>(
 	forms: { key: string; value: string }[],
@@ -58,7 +58,8 @@ function scoreReceiptWithForms(
 	const allText = allLines.join(" ");
 	const normalized = normalizeText(allText);
 
-	const kwRegex = /pago\s*movil|pago\s*móvil|tpago|tpage|recibo|pagomovilbdv|pagomóvil/;
+	const kwRegex =
+		/pago\s*movil|pago\s*móvil|tpago|tpage|recibo|pagomovilbdv|pagomóvil/;
 	if (kwRegex.test(normalized)) score += 3;
 
 	const refFound =
@@ -75,7 +76,8 @@ function scoreReceiptWithForms(
 
 	if (VZLA_AMOUNT.test(allText) || EMBEDDED_AMOUNT.test(allText)) score += 1;
 
-	const successRegex = /operación\s*exitosa|operacion\s*exitosa|operación\s*en\s*proceso|pago\s*exitoso|comprobante\s*de\s*pago|resumen\s*pago|transacción\s*exitosa|realizaste\s*un\s*pago|tu\s*pago\s*móvil\s*fue\s*exitoso/;
+	const successRegex =
+		/operación\s*exitosa|operacion\s*exitosa|operación\s*en\s*proceso|pago\s*exitoso|comprobante\s*de\s*pago|resumen\s*pago|transacción\s*exitosa|realizaste\s*un\s*pago|tu\s*pago\s*móvil\s*fue\s*exitoso/;
 	if (successRegex.test(normalized)) score += 1;
 
 	return score;
@@ -277,7 +279,10 @@ export function extractPagoMovil(result: TextractResult): PagoMovilPayment {
 	}
 
 	if (!originBank) {
-		const debitedValue = findValueNearLabel(layoutLines, DEBITED_ACCOUNT_LABELS);
+		const debitedValue = findValueNearLabel(
+			layoutLines,
+			DEBITED_ACCOUNT_LABELS,
+		);
 		if (debitedValue) {
 			const bank = matchBank(debitedValue);
 			if (bank) originBank = bank;

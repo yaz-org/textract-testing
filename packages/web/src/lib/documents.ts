@@ -6,9 +6,10 @@ import {
 	DynamoDBClient,
 } from "@aws-sdk/client-dynamodb";
 import {
-  DeleteObjectCommand,
-  GetObjectCommand, PutObjectCommand,
-  S3Client,
+	DeleteObjectCommand,
+	GetObjectCommand,
+	PutObjectCommand,
+	S3Client,
 } from "@aws-sdk/client-s3";
 import {
 	DeleteCommand,
@@ -30,8 +31,6 @@ const s3 = new S3Client({});
 const dynamo = DynamoDBDocumentClient.from(new DynamoDBClient({}), {
 	marshallOptions: { removeUndefinedValues: true },
 });
-
-
 
 const fileNameSchema = z
 	.string()
@@ -225,16 +224,12 @@ export async function saveTextractResult(
 	);
 }
 
-export async function saveDoctrResult(
-	documentId: string,
-	result: DoctrResult,
-) {
-  await dynamo.send(
+export async function saveDoctrResult(documentId: string, result: DoctrResult) {
+	await dynamo.send(
 		new UpdateCommand({
 			TableName: Resource.DocumentsTable.name,
 			Key: { documentId },
-			UpdateExpression:
-				"SET doctrResult = :result, doctrExtractedAt = :ts",
+			UpdateExpression: "SET doctrResult = :result, doctrExtractedAt = :ts",
 			ConditionExpression: "attribute_exists(documentId)",
 			ExpressionAttributeValues: {
 				":result": result,
@@ -304,14 +299,17 @@ export async function deleteDocuments(
 	return { success: true };
 }
 
-export async function exportDocumentsZip(): Promise<{ presignedUrl: string, docSize: number }> {
+export async function exportDocumentsZip(): Promise<{
+	presignedUrl: string;
+	docSize: number;
+}> {
 	const documents = await listDocuments();
 
-	const docsWithResults = documents.filter(
-		(doc) => doc.paymentResult,
-	);
+	const docsWithResults = documents.filter((doc) => doc.paymentResult);
 
-  console.log(`Exporting ${docsWithResults.length} documents with results out of ${documents.length} total documents.`);
+	console.log(
+		`Exporting ${docsWithResults.length} documents with results out of ${documents.length} total documents.`,
+	);
 
 	const archive = new ZipArchive({ zlib: { level: 9 } });
 	const chunks: Buffer[] = [];
@@ -324,9 +322,9 @@ export async function exportDocumentsZip(): Promise<{ presignedUrl: string, docS
 				{
 					fileName: doc.fileName,
 					fileSize: doc.size,
-          s3Key: doc.s3Key,
+					s3Key: doc.s3Key,
 					paymentResult: doc.paymentResult ?? null,
-          inferenceHistory: doc.inferenceHistory ?? null,
+					inferenceHistory: doc.inferenceHistory ?? null,
 				},
 				null,
 				2,
@@ -360,5 +358,3 @@ export async function exportDocumentsZip(): Promise<{ presignedUrl: string, docS
 
 	return { presignedUrl, docSize: docsWithResults.length };
 }
-
-

@@ -1,11 +1,17 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+	useMutation,
+	useQueryClient,
+	useSuspenseQuery,
+} from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
+import { AlertTriangle, RefreshCw } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import type { DocumentRow } from "#/components/documents/columns";
 import { DocumentsTable } from "#/components/documents/documents-table.tsx";
 import { DocumentsTableSkeleton } from "#/components/documents/documents-table-skeleton.tsx";
 import { PreviewDialog } from "#/components/documents/preview-dialog.tsx";
+import { Button } from "#/components/ui/button.tsx";
 import type { DocumentRecord } from "#/lib/documents";
 import {
 	deleteStoredDocument,
@@ -22,13 +28,33 @@ export const Route = createFileRoute("/documents")({
 			staleTime: 30 * 60 * 1000,
 		});
 	},
+	pendingComponent: DocumentsTableSkeleton,
+	errorComponent: ({ error, reset }) => (
+		<div className="flex items-center justify-center p-8">
+			<div className="flex flex-col items-center gap-3">
+				<AlertTriangle className="size-8 text-destructive" />
+				<p className="font-semibold">Failed to load documents.</p>
+				<p className="text-sm text-muted-foreground">
+					{error instanceof Error
+						? error.message
+						: "An unknown error occurred."}
+				</p>
+				{reset && (
+					<Button variant="outline" size="sm" onClick={reset}>
+						<RefreshCw className="size-4" />
+						Try again
+					</Button>
+				)}
+			</div>
+		</div>
+	),
 	component: DocumentsPage,
 });
 
 function DocumentsPage() {
 	const queryClient = useQueryClient();
 
-	const documentsQuery = useQuery({
+	const documentsQuery = useSuspenseQuery({
 		queryKey: ["documents"],
 		queryFn: () => getDocuments(),
 		refetchInterval: 30 * 60 * 1000,
@@ -155,24 +181,7 @@ function DocumentsPage() {
 		setPendingIds(new Set());
 	}
 
-	if (documentsQuery.isLoading) {
-		return <DocumentsTableSkeleton />;
-	}
-
-  if (documentsQuery.isError) {
-    return (
-      <div className="p-4 text-red-600">
-        <p>Failed to load documents.</p>
-        <p className="mt-1 text-sm">
-          {documentsQuery.error instanceof Error
-            ? documentsQuery.error.message
-            : "An unknown error occurred."}
-        </p>
-      </div>
-    );
-  }
-
-	const docs = documentsQuery.data ?? [];
+	const docs = documentsQuery.data;
 
 	const currentIndex = previewDocument
 		? docs.findIndex((d) => d.documentId === previewDocument.documentId)

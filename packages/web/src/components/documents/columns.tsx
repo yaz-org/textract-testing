@@ -86,12 +86,20 @@ export function getColumns({
 				const latestInference = doc.inferenceHistory?.at(-1);
 				const payment = latestInference?.payment ?? doc.paymentResult;
 
-				if (!payment && !doc.textractResult && !doc.doctrResult && !latestInference) {
+				if (
+					!payment &&
+					!doc.textractResult &&
+					!doc.doctrResult &&
+					!latestInference
+				) {
 					return <span className="text-muted-foreground">—</span>;
 				}
 
 				const inferenceType = latestInference?.inferenceType ?? "textract";
-				const extractedAt = latestInference?.extractedAt ?? doc.textractExtractedAt ?? doc.doctrExtractedAt;
+				const extractedAt =
+					latestInference?.extractedAt ??
+					doc.textractExtractedAt ??
+					doc.doctrExtractedAt;
 
 				if (!payment) {
 					if (!extractedAt) {
@@ -101,7 +109,9 @@ export function getColumns({
 						<div className="flex items-center gap-1.5">
 							<Tooltip>
 								<TooltipTrigger asChild>
-									<Badge variant="secondary">{inferenceType === "doctr" ? "docTR" : "OCR"}</Badge>
+									<Badge variant="secondary">
+										{inferenceType === "doctr" ? "docTR" : "OCR"}
+									</Badge>
 								</TooltipTrigger>
 								<TooltipContent>{formatDate(extractedAt)}</TooltipContent>
 							</Tooltip>
@@ -124,7 +134,9 @@ export function getColumns({
 									</span>
 								</TooltipContent>
 							</Tooltip>
-							<span className="text-xs text-muted-foreground">{inferenceType === "doctr" ? "docTR" : "OCR"}</span>
+							<span className="text-xs text-muted-foreground">
+								{inferenceType === "doctr" ? "docTR" : "OCR"}
+							</span>
 						</div>
 					);
 				}
@@ -137,7 +149,9 @@ export function getColumns({
 							</TooltipTrigger>
 							<TooltipContent>No pago móvil data found</TooltipContent>
 						</Tooltip>
-						<span className="text-xs text-muted-foreground">{inferenceType === "doctr" ? "docTR" : "OCR"}</span>
+						<span className="text-xs text-muted-foreground">
+							{inferenceType === "doctr" ? "docTR" : "OCR"}
+						</span>
 					</div>
 				);
 			},
