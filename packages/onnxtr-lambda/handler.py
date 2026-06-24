@@ -1,6 +1,5 @@
 import json
 import os
-import shutil
 import time
 import traceback
 from datetime import datetime
@@ -10,8 +9,8 @@ import boto3
 from onnxtr.io import DocumentFile
 
 _model = None
-_DET_ARCH = "db_mobilenet_v3_large"
-_RECO_ARCH = "crnn_mobilenet_v3_small"
+_DET_ARCH = "db_resnet50"
+_RECO_ARCH = "parseq"
 
 s3 = boto3.client("s3")
 ONNXTR_CACHE_DIR = os.getenv("ONNXTR_CACHE_DIR", "/tmp/onnxtr_cache")
@@ -23,16 +22,18 @@ def get_model():
     if _model is None:
         steps = {}
 
-        steps["opt_cache_exists"] = os.path.exists("/opt/onnxtr_cache")
+        opt_cache = "/opt/onnxtr_cache"
+        steps["opt_cache_exists"] = os.path.exists(opt_cache)
 
         t0 = time.time()
         if not os.path.exists(ONNXTR_CACHE_DIR):
-            if os.path.exists("/opt/onnxtr_cache"):
-                shutil.copytree("/opt/onnxtr_cache", ONNXTR_CACHE_DIR)
-                steps["copied_from_opt"] = True
+            if os.path.exists(opt_cache):
+                os.symlink(opt_cache, ONNXTR_CACHE_DIR)
+                steps["linked_from_opt"] = True
             else:
                 os.makedirs(ONNXTR_CACHE_DIR, exist_ok=True)
-                steps["copied_from_opt"] = False
+                steps["linked_from_opt"] = False
+        steps["is_symlink"] = os.path.islink(ONNXTR_CACHE_DIR)
         steps["prepare_cache_ms"] = round((time.time() - t0) * 1000)
 
         cache_stats = {"file_count": 0, "total_size_kb": 0, "files": []}

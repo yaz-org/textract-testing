@@ -1,0 +1,470 @@
+import {
+	AMOUNT_LABELS,
+	BENEFICIARY_LABELS,
+	CEDULA_PREFIXED,
+	CONCEPT_LABELS,
+	DATE_LABELS,
+	DATE_PATTERN,
+	DEBITED_ACCOUNT_LABELS,
+	DEST_BANK_LABELS,
+	DEST_CEDULA_LABELS,
+	DEST_PHONE_LABELS,
+	extractCedula,
+	extractPhone,
+	extractPhoneDigitsOnly,
+	extractPhoneLoose,
+	findValueNearLabel,
+	fuzzyMatchLabel,
+	INTL_PHONE,
+	isTpagoReceipt,
+	LOOSE_PHONE,
+	MASKED_PHONE,
+	matchBank,
+	ORIGIN_BANK_LABELS,
+	ORIGIN_PHONE_LABELS,
+	parseVzlaAmount,
+	parseVzlaDate,
+	REF_LABELS,
+	SCORE_THRESHOLD,
+	scoreReceipt,
+	stripBankCode,
+	VZLA_AMOUNT,
+	VZLA_PHONE,
+} from "./extractor-utils";
+import type { OnnxTRRawInference, PagoMovilPayment } from "./payment";
+
+function extractLines(result: OnnxTRRawInference): string[] {
+	const lines: string[] = [];
+	for (const page of result.pages) {
+		for (const block of page.blocks) {
+			for (const line of block.lines) {
+				const text = line.text.trim();
+				if (text.length > 0) {
+					lines.push(text);
+				}
+			}
+		}
+	}
+	return lines;
+}
+
+function collectBlockLines(result: OnnxTRRawInference): string[][] {
+	const blocks: string[][] = [];
+	for (const page of result.pages) {
+		for (const block of page.blocks) {
+			const blockLines = block.lines
+				.map((l) => l.text.trim())
+				.filter((t) => t.length > 0);
+			if (blockLines.length > 0) {
+				blocks.push(blockLines);
+			}
+		}
+	}
+	return blocks;
+}
+
+function findValueNearLabelBlockAware(
+	blockLinesArray: string[][],
+	allLines: string[],
+	labels: string[],
+	valuePattern?: RegExp,
+	maxDistance = 4,
+): string | null {
+	for (const blockLines of blockLinesArray) {
+		const result = findValueNearLabel(
+			blockLines,
+			labels,
+			valuePattern,
+			maxDistance,
+		);
+		if (result) return result;
+	}
+	return findValueNearLabel(allLines, labels, valuePattern, maxDistance);
+}
+
+export function extractOnnxTRPayment(
+	result: OnnxTRRawInference,
+): PagoMovilPayment {
+	const allLines = extractLines(result);
+	const blockLinesArray = collectBlockLines(result);
+	const totalScore = scoreReceipt(allLines);
+
+	if (totalScore < SCORE_THRESHOLD) {
+		return {
+			status: "INVALID",
+			extractedAt: new Date().toISOString(),
+			totalScore,
+			referenceNumber: "",
+			date: "",
+			amount: "",
+			amountValue: 0,
+		};
+	}
+
+	// --- Reference number ---
+	let referenceNumber =
+		findValueNearLabelBlockAware(
+			blockLinesArray,
+			allLines,
+			REF_LABELS,
+			/\d{6,15}/,
+		) ?? "";
+	if (!referenceNumber) {
+		for (const line of allLines) {
+			const m = line.match(/\d{8,15}/);
+			if (m) {
+				const candidate = m[0];
+				if (/0(?:412|414|416|424|426)\d{7}$/.test(candidate)) continue;
+				referenceNumber = candidate;
+				break;
+			}
+		}
+	}
+
+	// --- Amount ---
+	let amountData: { text: string; value: number } | null = null;
+
+	const rawAmount = findValueNearLabelBlockAware(
+		blockLinesArray,
+		allLines,
+		AMOUNT_LABELS,
+		VZLA_AMOUNT,
+	);
+	if (rawAmount) {
+		amountData = parseVzlaAmount(rawAmount);
+	}
+	if (!amountData) {
+		const candidates: { text: string; value: number }[] = [];
+		for (const line of allLines) {
+			const ad = parseVzlaAmount(line);
+			if (ad) candidates.push(ad);
+		}
+		if (candidates.length > 0) {
+			candidates.sort((a, b) => b.value - a.value);
+			amountData = candidates[0];
+		}
+	}
+	const amount = amountData?.text ?? "";
+	const amountValue = amountData?.value ?? 0;
+
+	// --- Date ---
+	let date: string | undefined;
+	const rawDate = findValueNearLabelBlockAware(
+		blockLinesArray,
+		allLines,
+		DATE_LABELS,
+		DATE_PATTERN,
+	);
+	if (rawDate) {
+		date = parseVzlaDate(rawDate);
+	}
+	if (!date) {
+		for (const line of allLines) {
+			const parsed = parseVzlaDate(line);
+			if (parsed) {
+				date = parsed;
+				break;
+			}
+		}
+	}
+
+	// --- Destination data ---
+	let destinationPhone = findValueNearLabelBlockAware(
+		blockLinesArray,
+		allLines,
+		DEST_PHONE_LABELS,
+		VZLA_PHONE,
+	);
+	if (destinationPhone) {
+		const digits = destinationPhone.replace(/[^\d]/g, "");
+		destinationPhone = `${digits.slice(0, 4)}-${digits.slice(4)}`;
+	}
+	if (!destinationPhone) {
+		destinationPhone = findValueNearLabelBlockAware(
+			blockLinesArray,
+			allLines,
+			DEST_PHONE_LABELS,
+			MASKED_PHONE,
+		);
+	}
+	if (!destinationPhone) {
+		for (const line of allLines) {
+			if (fuzzyMatchLabel(line, DEST_PHONE_LABELS)) {
+				const after = line.replace(/^[^:]+:\s*/, "");
+				const phone = extractPhone(after);
+				if (phone) {
+					destinationPhone = phone;
+					break;
+				}
+			}
+		}
+	}
+
+	let destinationCedula: string | undefined;
+	const rawCedula = findValueNearLabelBlockAware(
+		blockLinesArray,
+		allLines,
+		DEST_CEDULA_LABELS,
+		CEDULA_PREFIXED,
+	);
+	if (rawCedula) {
+		destinationCedula = extractCedula(rawCedula) ?? undefined;
+	}
+	if (!destinationCedula) {
+		for (const line of allLines) {
+			if (fuzzyMatchLabel(line, DEST_CEDULA_LABELS)) {
+				const after = line.replace(/^[^:]+:\s*/, "");
+				const cedula = extractCedula(after);
+				if (cedula) {
+					destinationCedula = cedula;
+					break;
+				}
+			}
+		}
+	}
+	if (!destinationCedula) {
+		const raw = findValueNearLabelBlockAware(
+			blockLinesArray,
+			allLines,
+			["identificación", "identificacion"],
+			/\d{6,10}/,
+		);
+		if (raw) {
+			destinationCedula = raw;
+		}
+	}
+	if (!destinationCedula) {
+		const idKeywords = [
+			"identificacion",
+			"identificación",
+			"documento",
+			"ci/rif",
+			"cédula",
+			"cedula",
+		];
+		for (const line of allLines) {
+			const normalized = line
+				.toLowerCase()
+				.replace(/[áàäâ]/g, "a")
+				.replace(/[éèëê]/g, "e")
+				.replace(/[íìïî]/g, "i")
+				.replace(/[óòöô]/g, "o")
+				.replace(/[úùüû]/g, "u")
+				.replace(/ñ/g, "n");
+			if (idKeywords.some((kw) => normalized.includes(kw))) {
+				const m = line.match(/\d{6,8}/);
+				if (m) {
+					destinationCedula = m[0];
+					break;
+				}
+			}
+		}
+	}
+	if (!destinationCedula) {
+		for (const line of allLines) {
+			const cedula = extractCedula(line);
+			if (cedula) {
+				destinationCedula = cedula;
+				break;
+			}
+		}
+	}
+
+	let destinationBank: string | undefined;
+	const rawDestBank = findValueNearLabelBlockAware(
+		blockLinesArray,
+		allLines,
+		DEST_BANK_LABELS,
+	);
+	if (rawDestBank) {
+		const stripped = stripBankCode(rawDestBank);
+		destinationBank =
+			matchBank(stripped) ?? matchBank(rawDestBank) ?? undefined;
+	}
+
+	// --- Compound beneficiary fallback ---
+	if (!destinationPhone || !destinationCedula || !destinationBank) {
+		const compoundParts: string[] = [];
+		let foundBeneficiary = false;
+		for (let i = 0; i < allLines.length; i++) {
+			if (fuzzyMatchLabel(allLines[i], BENEFICIARY_LABELS)) {
+				foundBeneficiary = true;
+				continue;
+			}
+			if (foundBeneficiary) {
+				const line = allLines[i].trim();
+				if (line.length > 0) compoundParts.push(line);
+				if (compoundParts.length >= 4) break;
+			}
+		}
+		const compound = compoundParts.length > 0 ? compoundParts.join(" ") : null;
+		if (compound) {
+			if (!destinationPhone) {
+				destinationPhone =
+					extractPhone(compound) ??
+					extractPhoneLoose(compound) ??
+					extractPhoneDigitsOnly(compound);
+			}
+			if (!destinationCedula) {
+				destinationCedula = extractCedula(compound) ?? undefined;
+			}
+			if (!destinationBank) {
+				destinationBank = matchBank(compound) ?? undefined;
+			}
+		}
+	}
+
+	if (!destinationBank) {
+		for (const line of allLines) {
+			const bank = matchBank(line);
+			if (bank) {
+				destinationBank = bank;
+				break;
+			}
+		}
+	}
+
+	if (!destinationPhone) {
+		const allText = allLines.join(" ");
+		const hasPhone =
+			VZLA_PHONE.test(allText) ||
+			MASKED_PHONE.test(allText) ||
+			LOOSE_PHONE.test(allText) ||
+			INTL_PHONE.test(allText) ||
+			!!extractPhoneDigitsOnly(allText);
+		if (hasPhone) {
+			for (const line of allLines) {
+				const phone = extractPhone(line);
+				if (phone) {
+					destinationPhone = phone;
+					break;
+				}
+			}
+			if (!destinationPhone) {
+				for (const line of allLines) {
+					const phone = extractPhoneLoose(line);
+					if (phone) {
+						destinationPhone = phone;
+						break;
+					}
+				}
+			}
+			if (!destinationPhone) {
+				for (const line of allLines) {
+					const m = line.match(INTL_PHONE);
+					if (m) {
+						destinationPhone = `0${m[0].slice(2)}`;
+						break;
+					}
+				}
+			}
+			if (!destinationPhone) {
+				for (const line of allLines) {
+					const phone = extractPhoneDigitsOnly(line);
+					if (phone) {
+						destinationPhone = phone;
+						break;
+					}
+				}
+			}
+		}
+	}
+
+	// --- Origin data ---
+	let originPhone =
+		findValueNearLabelBlockAware(
+			blockLinesArray,
+			allLines,
+			ORIGIN_PHONE_LABELS,
+			VZLA_PHONE,
+			2,
+		) ?? undefined;
+	if (originPhone) {
+		const digits = originPhone.replace(/[^\d]/g, "");
+		originPhone = `${digits.slice(0, 4)}-${digits.slice(4)}`;
+	}
+	if (!originPhone) {
+		originPhone =
+			findValueNearLabelBlockAware(
+				blockLinesArray,
+				allLines,
+				ORIGIN_PHONE_LABELS,
+				MASKED_PHONE,
+				2,
+			) ?? undefined;
+	}
+
+	let originBank: string | undefined;
+	const rawOriginBank = findValueNearLabelBlockAware(
+		blockLinesArray,
+		allLines,
+		ORIGIN_BANK_LABELS,
+	);
+	if (rawOriginBank) {
+		const stripped = stripBankCode(rawOriginBank);
+		originBank = matchBank(stripped) ?? matchBank(rawOriginBank) ?? undefined;
+	}
+
+	if (!originPhone && !originBank) {
+		const origValue = findValueNearLabelBlockAware(
+			blockLinesArray,
+			allLines,
+			ORIGIN_PHONE_LABELS,
+		);
+		if (origValue) {
+			const phone = extractPhone(origValue);
+			if (phone) {
+				originPhone = phone;
+			} else {
+				originBank = matchBank(origValue) ?? undefined;
+			}
+		}
+	}
+
+	if (!originBank) {
+		const debitedValue = findValueNearLabelBlockAware(
+			blockLinesArray,
+			allLines,
+			DEBITED_ACCOUNT_LABELS,
+		);
+		if (debitedValue) {
+			const bank = matchBank(debitedValue);
+			if (bank) originBank = bank;
+		}
+	}
+
+	if (!originBank && isTpagoReceipt(allLines)) {
+		originBank = "0105";
+	}
+
+	if (!originBank) {
+		for (const line of allLines) {
+			const bank = matchBank(line);
+			if (bank) {
+				originBank = bank;
+				break;
+			}
+		}
+	}
+
+	// --- Concept ---
+	const concept =
+		findValueNearLabelBlockAware(blockLinesArray, allLines, CONCEPT_LABELS) ??
+		undefined;
+
+	return {
+		status: "VALID",
+		extractedAt: new Date().toISOString(),
+		totalScore,
+		referenceNumber,
+		date,
+		amount,
+		amountValue,
+		originPhone,
+		destinationPhone: destinationPhone ?? undefined,
+		destinationCedula: destinationCedula ?? undefined,
+		originBank,
+		destinationBank,
+		concept,
+	};
+}

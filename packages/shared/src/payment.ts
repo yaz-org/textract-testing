@@ -32,7 +32,59 @@ export type DoctrResult = {
 	warnings: string[];
 };
 
-export type InferenceType = "doctr" | "textract";
+export type OnnxTRWord = {
+	text: string;
+	confidence: number;
+	geometry: [number, number, number, number];
+	objectness_score: number;
+	crop_orientation: { value: number | null; confidence: number | null };
+};
+
+export type OnnxTRLine = {
+	text: string;
+	geometry: [number, number, number, number];
+	objectness_score: number;
+	words: OnnxTRWord[];
+};
+
+export type OnnxTRArtefact = {
+	type: string;
+	confidence: number;
+	geometry: [number, number, number, number];
+};
+
+export type OnnxTRBlock = {
+	text: string;
+	objectness_score: number;
+	geometry: [number, number, number, number];
+	lines: OnnxTRLine[];
+	artefacts: OnnxTRArtefact[];
+};
+
+export type OnnxTRPage = {
+	page_idx: number;
+	dimensions: { height: number; width: number };
+	orientation: { value: number | null; confidence: number | null };
+	language: { value: string | null; confidence: number | null };
+	blocks: OnnxTRBlock[];
+	text: string;
+};
+
+export type OnnxTRRawInference = {
+	inferenceType: "onnxtr";
+	extractedAt: string;
+	pageCount: number;
+	pages: OnnxTRPage[];
+	fullText: string;
+	averageConfidence: number | null;
+	inferenceTimeMs: number;
+	modelInfo: {
+		detArch: string;
+		recoArch: string;
+	};
+};
+
+export type InferenceType = "doctr" | "textract" | "onnxtr";
 
 export type DocTRRawInference = {
 	inferenceType: "doctr";
@@ -57,7 +109,7 @@ export type TextractRawInference = {
 	forms: { key: string; value: string; confidence: number }[];
 };
 
-export type RawInference = DocTRRawInference | TextractRawInference;
+export type RawInference = DocTRRawInference | TextractRawInference | OnnxTRRawInference;
 
 export type InferenceRecord = {
 	inferenceType: InferenceType;

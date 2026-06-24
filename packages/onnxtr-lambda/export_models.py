@@ -8,8 +8,8 @@ from onnxtr.models import ocr_predictor
 cache_dir = os.environ.get("ONNXTR_CACHE_DIR", "/opt/onnxtr_cache")
 
 ocr_predictor(
-    det_arch="db_mobilenet_v3_large",
-    reco_arch="crnn_mobilenet_v3_small",
+    det_arch="db_resnet50",
+    reco_arch="parseq",
     assume_straight_pages=True,
     preserve_aspect_ratio=True,
     disable_page_orientation=True,
