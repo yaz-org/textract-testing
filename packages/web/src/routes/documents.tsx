@@ -1,34 +1,30 @@
 import {
 	useMutation,
+	useQuery,
 	useQueryClient,
 	useSuspenseQuery,
 } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
 import { AlertTriangle, RefreshCw } from "lucide-react";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import type { DocumentRow } from "#/components/documents/columns";
 import { DocumentsTable } from "#/components/documents/documents-table.tsx";
 import { DocumentsTableSkeleton } from "#/components/documents/documents-table-skeleton.tsx";
 import { PreviewDialog } from "#/components/documents/preview-dialog.tsx";
 import { Button } from "#/components/ui/button.tsx";
-import type { DocumentRecord } from "#/lib/documents";
+import type { DocumentTableRecord } from "#/lib/documents";
 import {
 	clearStoredDocumentResults,
 	deleteStoredDocument,
 	exportDocumentsAsZip,
+	getDocumentPresignedUrls,
 	getDocuments,
 	processDocument,
 } from "#/lib/server-fns";
 
 export const Route = createFileRoute("/documents")({
-	loader: ({ context }) => {
-		context.queryClient.prefetchQuery({
-			queryKey: ["documents"],
-			queryFn: () => getDocuments(),
-			staleTime: 30 * 60 * 1000,
-		});
-	},
+	pendingMinMs: 300,
 	pendingComponent: DocumentsTableSkeleton,
 	errorComponent: ({ error, reset }) => (
 		<div className="flex items-center justify-center p-8">
@@ -60,8 +56,26 @@ function DocumentsPage() {
 		queryFn: () => getDocuments(),
 		refetchInterval: 30 * 60 * 1000,
 		staleTime: 30 * 60 * 1000,
-		refetchIntervalInBackground: true,
 	});
+
+
+	const docs = documentsQuery.data;
+
+	const presignedUrlsQuery = useQuery({
+		queryKey: ["documents", "presignedUrls"],
+		queryFn: () => getDocumentPresignedUrls({ data: docs.map((d) => d.s3Key) }),
+		enabled: docs.length > 0,
+		staleTime: 30 * 60 * 1000,
+	});
+
+	const rows: DocumentRow[] = useMemo(
+		() =>
+			docs.map((doc) => ({
+				...doc,
+				presignedUrl: presignedUrlsQuery.data?.[doc.s3Key] ?? "",
+			})),
+		[docs, presignedUrlsQuery.data],
+	);
 
 	const [pendingIds, setPendingIds] = useState<Set<string>>(new Set());
 	const [error, setError] = useState<string | null>(null);
@@ -179,7 +193,7 @@ function DocumentsPage() {
 		exportZipMutation.mutate();
 	}
 
-	function handleDelete(document: DocumentRecord) {
+	function handleDelete(document: DocumentTableRecord) {
 		deleteMutation.mutate([
 			{ documentId: document.documentId, s3Key: document.s3Key },
 		]);
@@ -202,26 +216,24 @@ function DocumentsPage() {
 		clearResultsMutation.mutate(items);
 	}
 
-	const docs = documentsQuery.data;
-
 	const currentIndex = previewDocument
-		? docs.findIndex((d) => d.documentId === previewDocument.documentId)
+		? rows.findIndex((d) => d.documentId === previewDocument.documentId)
 		: -1;
 
 	const goToPrev = () => {
-		if (currentIndex > 0) setPreviewDocument(docs[currentIndex - 1]);
+		if (currentIndex > 0) setPreviewDocument(rows[currentIndex - 1]);
 	};
 
 	const goToNext = () => {
-		if (currentIndex < docs.length - 1) {
-			setPreviewDocument(docs[currentIndex + 1]);
+		if (currentIndex < rows.length - 1) {
+			setPreviewDocument(rows[currentIndex + 1]);
 		}
 	};
 
 	return (
 		<>
 			<DocumentsTable
-				data={docs}
+				data={rows}
 				onDelete={handleDelete}
 				onPreviewSelected={(document) => {
 					setPreviewDocument(document);
@@ -239,9 +251,9 @@ function DocumentsPage() {
 			<PreviewDialog
 				open={dialogOpen}
 				onOpenChange={setDialogOpen}
-				previewDocument={previewDocument}
+				documentId={previewDocument?.documentId ?? null}
 				currentIndex={currentIndex}
-				totalCount={docs.length}
+				totalCount={rows.length}
 				goToPrev={goToPrev}
 				goToNext={goToNext}
 				onClose={() => setPreviewDocument(null)}

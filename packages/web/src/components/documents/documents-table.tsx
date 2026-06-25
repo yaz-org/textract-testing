@@ -16,13 +16,13 @@ import {
 	TableHeader,
 	TableRow,
 } from "#/components/ui/table.tsx";
-import type { DocumentRecord } from "#/lib/documents";
+import type { DocumentTableRecord } from "#/lib/documents";
 import { cn } from "#/lib/utils";
 import { type DocumentRow, getColumns } from "./columns";
 
 interface DocumentsTableProps {
 	data: DocumentRow[];
-	onDelete: (document: DocumentRecord) => void;
+	onDelete: (document: DocumentTableRecord) => void;
 	onPreviewSelected: (document: DocumentRow) => void;
 	onDeleteSelected: (items: { documentId: string; s3Key: string }[]) => void;
 	onProcessSelected: (

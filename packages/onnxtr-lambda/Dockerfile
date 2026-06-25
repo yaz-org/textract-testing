@@ -4,7 +4,7 @@ RUN dnf install -y gcc gcc-c++ make python3-devel && dnf clean all
 
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
-RUN uv pip install --system "onnxtr[cpu-headless]>=0.8" boto3 pillow --no-cache-dir
+RUN uv pip install --system "onnxtr[cpu-headless]>=0.8" pillow requests --no-cache-dir
 
 ENV ONNXTR_CACHE_DIR=/opt/onnxtr_cache
 COPY export_models.py .

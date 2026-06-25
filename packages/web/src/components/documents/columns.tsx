@@ -9,11 +9,11 @@ import {
 	TooltipContent,
 	TooltipTrigger,
 } from "#/components/ui/tooltip.tsx";
-import type { DocumentRecord } from "#/lib/documents";
+import type {DocumentRecord, DocumentTableRecord} from "#/lib/documents";
 import { formatBytes, formatDate } from "#/lib/format";
 import { SortHeader } from "./sort-header";
 
-export type DocumentRow = DocumentRecord & { presignedUrl: string };
+export type DocumentRow = DocumentTableRecord & { presignedUrl: string };
 
 const columnHelper = createColumnHelper<DocumentRow>();
 
@@ -83,40 +83,12 @@ export function getColumns({
 				const doc = row.original;
 
 				// Try new inferenceHistory first, then fall back to legacy
-				const latestInference = doc.inferenceHistory?.at(-1);
-				const payment = latestInference?.payment ?? doc.paymentResult;
+				const payment = doc.paymentResult;
 
 				if (
-					!payment &&
-					!doc.textractResult &&
-					!doc.doctrResult &&
-					!latestInference
+					!payment
 				) {
 					return <span className="text-muted-foreground">—</span>;
-				}
-
-				const inferenceType = latestInference?.inferenceType ?? "textract";
-				const extractedAt =
-					latestInference?.extractedAt ??
-					doc.textractExtractedAt ??
-					doc.doctrExtractedAt;
-
-				if (!payment) {
-					if (!extractedAt) {
-						return <span className="text-muted-foreground">No data</span>;
-					}
-					return (
-						<div className="flex items-center gap-1.5">
-							<Tooltip>
-								<TooltipTrigger asChild>
-									<Badge variant="secondary">
-										{inferenceType === "doctr" ? "docTR" : "OCR"}
-									</Badge>
-								</TooltipTrigger>
-								<TooltipContent>{formatDate(extractedAt)}</TooltipContent>
-							</Tooltip>
-						</div>
-					);
 				}
 
 				if (payment.status === "VALID") {
@@ -134,9 +106,6 @@ export function getColumns({
 									</span>
 								</TooltipContent>
 							</Tooltip>
-							<span className="text-xs text-muted-foreground">
-								{inferenceType === "doctr" ? "docTR" : "OCR"}
-							</span>
 						</div>
 					);
 				}
@@ -149,9 +118,6 @@ export function getColumns({
 							</TooltipTrigger>
 							<TooltipContent>No pago móvil data found</TooltipContent>
 						</Tooltip>
-						<span className="text-xs text-muted-foreground">
-							{inferenceType === "doctr" ? "docTR" : "OCR"}
-						</span>
 					</div>
 				);
 			},

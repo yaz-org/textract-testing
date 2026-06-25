@@ -3,13 +3,14 @@ import { extractOnnxTRPayment, saveInference } from "@textract-testing/shared";
 import type { OnnxTRRawInference, InferenceRecord } from "@textract-testing/shared";
 
 interface FunctionUrlEvent {
-  httpMethod: string;
-  path: string;
+  httpMethod?: string;
+  rawPath?: string;
+  path?: string;
   body?: string;
   headers: Record<string, string>;
   requestContext: {
-    domainName: string;
-    http: { method: string; path: string };
+    domainName?: string;
+    http: { method?: string; path?: string };
   };
 }
 
@@ -27,7 +28,8 @@ interface CallbackPayload {
 }
 
 export const handler = async (event: FunctionUrlEvent) => {
-  const match = event.path.match(/\/documents\/([^/]+)/);
+  const p = event.rawPath || event.path || event.requestContext?.http?.path || "";
+  const match = p.match(/\/documents\/([^/]+)/);
   const documentId = match?.[1];
   if (!documentId) {
     return {

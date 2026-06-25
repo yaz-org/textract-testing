@@ -10,7 +10,9 @@ import {
 	deleteDocumentsSchema,
 	exportDocumentsZip,
 	finalizeUploadSchema,
+	getDocument,
 	getPresignedUrl,
+	getPresignedUrls,
 	listDocuments,
 	saveDocumentRecord,
 	uploadRequestSchema,
@@ -20,15 +22,24 @@ const sqs = new SQSClient({});
 
 export const getDocuments = createServerFn({ method: "GET" }).handler(
 	async () => {
-		const documents = await listDocuments();
-		return Promise.all(
-			documents.map(async (doc) => ({
-				...doc,
-				presignedUrl: await getPresignedUrl(doc.s3Key),
-			})),
-		);
+		return listDocuments();
 	},
 );
+
+export const getDocumentRecord = createServerFn({ method: "GET" })
+	.validator(z.string().uuid())
+	.handler(async ({ data: documentId }) => {
+		const doc = await getDocument(documentId);
+		if (!doc) throw new Error("Document not found");
+		const presignedUrl = await getPresignedUrl(doc.s3Key);
+		return { ...doc, presignedUrl };
+	});
+
+export const getDocumentPresignedUrls = createServerFn({ method: "GET" })
+	.validator(z.array(z.string()))
+	.handler(async ({ data }) => {
+		return getPresignedUrls(data);
+	});
 
 export const createDocumentUpload = createServerFn({ method: "POST" })
 	.validator(z.array(uploadRequestSchema))

@@ -24,7 +24,12 @@ import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { ZipArchive } from "archiver";
 import { Resource } from "sst";
 import { z } from "zod";
-import type { DoctrResult, InferenceRecord, PagoMovilPayment } from "./payment";
+import type {
+	DoctrResult,
+	InferenceRecord,
+	InferenceType,
+	PagoMovilPayment,
+} from "./payment";
 import type { TextractResult } from "./textract";
 
 const s3 = new S3Client({});
@@ -84,6 +89,17 @@ export type DocumentRecord = {
 	doctrResult?: DoctrResult;
 	doctrExtractedAt?: string;
 	inferenceHistory?: InferenceRecord[];
+};
+
+export type DocumentTableRecord = {
+	documentId: string;
+	fileName: string;
+	s3Key: string;
+	contentType: string;
+	size: number;
+	contentHash: string;
+	createdAt: string;
+	paymentResult?: PagoMovilPayment;
 };
 
 export async function createUploadUrl(
@@ -247,20 +263,38 @@ export async function getPresignedUrl(s3Key: string) {
 	return getSignedUrl(s3, command, { expiresIn: 3600 });
 }
 
+export async function getPresignedUrls(s3Keys: string[]) {
+	const entries = await Promise.all(
+		s3Keys.map(async (s3Key) => {
+			const url = await getPresignedUrl(s3Key);
+			return [s3Key, url] as const;
+		}),
+	);
+	return Object.fromEntries(entries);
+}
+
 export async function listDocuments() {
-	const items: DocumentRecord[] = [];
+	const items: DocumentTableRecord[] = [];
 	let lastEvaluatedKey: Record<string, any> | undefined;
 
 	do {
 		const response = await dynamo.send(
 			new ScanCommand({
 				TableName: Resource.DocumentsTable.name,
+				ProjectionExpression:
+					"documentId, fileName, s3Key, contentType, size, contentHash, createdAt, textractExtractedAt, doctrExtractedAt, paymentResult, inferenceHistory",
 				ExclusiveStartKey: lastEvaluatedKey,
 			}),
 		);
 
 		if (response.Items) {
-			items.push(...(response.Items as DocumentRecord[]));
+			const mapped = (response.Items as DocumentRecord[]).map(
+				(item) =>
+					({
+						...item,
+					}) satisfies DocumentTableRecord,
+			);
+			items.push(...mapped);
 		}
 
 		lastEvaluatedKey = response.LastEvaluatedKey;
@@ -352,7 +386,7 @@ export async function exportDocumentsZip(): Promise<{
 					fileSize: doc.size,
 					s3Key: doc.s3Key,
 					paymentResult: doc.paymentResult ?? null,
-					inferenceHistory: doc.inferenceHistory ?? null,
+					// inferenceHistory: doc.inferenceHistory ?? null,
 				},
 				null,
 				2,

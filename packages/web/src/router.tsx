@@ -12,7 +12,6 @@ export function getRouter() {
 		context,
 		scrollRestoration: true,
 		defaultPreload: "intent",
-		defaultPreloadStaleTime: 0,
 		defaultErrorComponent: ({ error }) => <ErrorFallback error={error} />,
 	});
 

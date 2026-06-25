@@ -5,6 +5,7 @@ import traceback
 import uuid
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import urlparse
 
 import requests
 from onnxtr.io import DocumentFile
@@ -142,7 +143,9 @@ def lambda_handler(event, context):
             resp = requests.get(download_url, timeout=120)
             resp.raise_for_status()
 
-            tmp_path = f"/tmp/{uuid.uuid4()}_{Path(download_url).name}"
+            parsed = urlparse(download_url)
+            filename = Path(parsed.path).name
+            tmp_path = f"/tmp/{uuid.uuid4()}_{filename}"
             with open(tmp_path, "wb") as f:
                 f.write(resp.content)
 
