@@ -24,6 +24,7 @@ interface DocumentsTableProps {
 	data: DocumentRow[];
 	onDelete: (document: DocumentTableRecord) => void;
 	onPreviewSelected: (document: DocumentRow) => void;
+	onPrefetchDocument?: (documentId: string) => void;
 	onDeleteSelected: (items: { documentId: string; s3Key: string }[]) => void;
 	onProcessSelected: (
 		items: { documentId: string; s3Key: string }[],
@@ -40,6 +41,7 @@ export function DocumentsTable({
 	data,
 	onDelete,
 	onPreviewSelected,
+	onPrefetchDocument,
 	onDeleteSelected,
 	onProcessSelected,
 	onClearResults,
@@ -55,6 +57,7 @@ export function DocumentsTable({
 
 	const columns = getColumns({
 		onPreviewSelected,
+		onPrefetchDocument,
 		onDelete,
 		hasDocId: (docId) => pendingIds.has(docId),
 	});

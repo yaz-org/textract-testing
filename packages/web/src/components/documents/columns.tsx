@@ -20,9 +20,11 @@ const columnHelper = createColumnHelper<DocumentRow>();
 export function getColumns({
 	onDelete,
 	onPreviewSelected,
+	onPrefetchDocument,
 	hasDocId,
 }: {
 	onPreviewSelected: (document: DocumentRow) => void;
+	onPrefetchDocument?: (documentId: string) => void;
 	onDelete: (document: DocumentRecord) => void;
 	hasDocId: (docId: string) => boolean;
 }) {
@@ -130,6 +132,7 @@ export function getColumns({
 			cell: ({ row }) => (
 				<button
 					type="button"
+					onMouseEnter={() => onPrefetchDocument?.(row.original.documentId)}
 					onClick={() => {
 						onPreviewSelected(row.original);
 					}}

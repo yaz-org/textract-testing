@@ -44,7 +44,7 @@ function DocumentPreviewSkeleton() {
 	return (
 		<div className="flex flex-col gap-6 sm:flex-row">
 			<div className="relative flex min-w-0 flex-1 items-start justify-center">
-				<div className="aspect-[3/4] w-full rounded-md bg-accent animate-pulse" />
+				<div className="aspect-3/4 w-full rounded-md bg-accent animate-pulse" />
 			</div>
 			<div className="w-85 shrink-0 space-y-4">
 				<Skeleton className="h-4 w-48" />
@@ -125,6 +125,7 @@ export function PreviewDialog({
 			if (!documentId) throw new Error("No document ID");
 			return getDocumentRecord({ data: documentId });
 		},
+		staleTime: 5 * 60 * 1000,
 		enabled: open && !!documentId,
 	});
 

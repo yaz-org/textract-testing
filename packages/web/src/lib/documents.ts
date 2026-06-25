@@ -1,422 +1,421 @@
 import "@tanstack/react-start/server-only";
 
-import { randomUUID } from "node:crypto";
+import {randomUUID} from "node:crypto";
+import {ConditionalCheckFailedException, DynamoDBClient,} from "@aws-sdk/client-dynamodb";
+import {DeleteObjectCommand, GetObjectCommand, PutObjectCommand, S3Client,} from "@aws-sdk/client-s3";
 import {
-	ConditionalCheckFailedException,
-	DynamoDBClient,
-} from "@aws-sdk/client-dynamodb";
-import {
-	DeleteObjectCommand,
-	GetObjectCommand,
-	PutObjectCommand,
-	S3Client,
-} from "@aws-sdk/client-s3";
-import {
-	DeleteCommand,
-	DynamoDBDocumentClient,
-	GetCommand,
-	PutCommand,
-	QueryCommand,
-	ScanCommand,
-	UpdateCommand,
+  DeleteCommand,
+  DynamoDBDocumentClient,
+  GetCommand,
+  PutCommand,
+  QueryCommand,
+  ScanCommand,
+  UpdateCommand,
 } from "@aws-sdk/lib-dynamodb";
-import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
-import { ZipArchive } from "archiver";
-import { Resource } from "sst";
-import { z } from "zod";
-import type {
-	DoctrResult,
-	InferenceRecord,
-	InferenceType,
-	PagoMovilPayment,
-} from "./payment";
-import type { TextractResult } from "./textract";
+import {getSignedUrl} from "@aws-sdk/s3-request-presigner";
+import {ZipArchive} from "archiver";
+import {Resource} from "sst";
+import {z} from "zod";
+import type {DoctrResult, InferenceRecord, PagoMovilPayment,} from "./payment";
+import type {TextractResult} from "./textract";
 
 const s3 = new S3Client({});
 const dynamo = DynamoDBDocumentClient.from(new DynamoDBClient({}), {
-	marshallOptions: { removeUndefinedValues: true },
+  marshallOptions: {removeUndefinedValues: true},
 });
 
 const fileNameSchema = z
-	.string()
-	.trim()
-	.min(1)
-	.max(255)
-	.transform((value) => value.replace(/[^A-Za-z0-9._-]+/g, "-"));
+.string()
+.trim()
+.min(1)
+.max(255)
+.transform((value) => value.replace(/[^A-Za-z0-9._-]+/g, "-"));
 
 export const uploadRequestSchema = z.object({
-	fileName: fileNameSchema,
-	contentType: z.string().trim().min(1).max(255),
-	size: z
-		.number()
-		.int()
-		.positive()
-		.max(2 * 1024 * 1024),
-	contentHash: z.string().length(64),
+  fileName: fileNameSchema,
+  contentType: z.string().trim().min(1).max(255),
+  size: z
+  .number()
+  .int()
+  .positive()
+  .max(2 * 1024 * 1024),
+  contentHash: z.string().length(64),
 });
 
 export const finalizeUploadSchema = z.object({
-	documentId: z.string().uuid(),
-	fileName: z.string().trim().min(1).max(255),
-	s3Key: z.string().trim().min(1).max(1024),
-	contentType: z.string().trim().min(1).max(255),
-	size: z
-		.number()
-		.int()
-		.positive()
-		.max(2 * 1024 * 1024),
-	contentHash: z.string().length(64),
+  documentId: z.string().uuid(),
+  fileName: z.string().trim().min(1).max(255),
+  s3Key: z.string().trim().min(1).max(1024),
+  contentType: z.string().trim().min(1).max(255),
+  size: z
+  .number()
+  .int()
+  .positive()
+  .max(2 * 1024 * 1024),
+  contentHash: z.string().length(64),
 });
 
 export const deleteDocumentSchema = z.object({
-	documentId: z.string().uuid(),
-	s3Key: z.string().trim().min(1).max(1024),
+  documentId: z.string().uuid(),
+  s3Key: z.string().trim().min(1).max(1024),
 });
 
 export const deleteDocumentsSchema = z.array(deleteDocumentSchema);
 
 export type DocumentRecord = {
-	documentId: string;
-	fileName: string;
-	s3Key: string;
-	contentType: string;
-	size: number;
-	contentHash: string;
-	createdAt: string;
-	textractResult?: TextractResult;
-	textractExtractedAt?: string;
-	paymentResult?: PagoMovilPayment;
-	doctrResult?: DoctrResult;
-	doctrExtractedAt?: string;
-	inferenceHistory?: InferenceRecord[];
+  documentId: string;
+  fileName: string;
+  s3Key: string;
+  contentType: string;
+  size: number;
+  contentHash: string;
+  createdAt: string;
+  textractResult?: TextractResult;
+  textractExtractedAt?: string;
+  paymentResult?: PagoMovilPayment;
+  doctrResult?: DoctrResult;
+  doctrExtractedAt?: string;
+  inferenceHistory?: InferenceRecord[];
 };
 
 export type DocumentTableRecord = {
-	documentId: string;
-	fileName: string;
-	s3Key: string;
-	contentType: string;
-	size: number;
-	contentHash: string;
-	createdAt: string;
-	paymentResult?: PagoMovilPayment;
+  documentId: string;
+  fileName: string;
+  s3Key: string;
+  contentType: string;
+  size: number;
+  contentHash: string;
+  createdAt: string;
+  paymentResult?: PagoMovilPayment;
 };
 
+export type DocumentTableRecordWithUrl = DocumentTableRecord & {presignedUrl: string};
+
 export async function createUploadUrl(
-	input: z.infer<typeof uploadRequestSchema>,
+    input: z.infer<typeof uploadRequestSchema>,
 ) {
-	const existing = await dynamo.send(
-		new QueryCommand({
-			TableName: Resource.DocumentsTable.name,
-			IndexName: "HashIndex",
-			KeyConditionExpression: "contentHash = :hash",
-			ExpressionAttributeValues: { ":hash": input.contentHash },
-		}),
-	);
+  const existing = await dynamo.send(
+      new QueryCommand({
+        TableName: Resource.DocumentsTable.name,
+        IndexName: "HashIndex",
+        KeyConditionExpression: "contentHash = :hash",
+        ExpressionAttributeValues: {":hash": input.contentHash},
+      }),
+  );
 
-	if (existing.Items && existing.Items.length > 0) {
-		throw new Error("A file with this content has already been uploaded.");
-	}
+  if (existing.Items && existing.Items.length > 0) {
+    throw new Error("A file with this content has already been uploaded.");
+  }
 
-	try {
-		await dynamo.send(
-			new PutCommand({
-				TableName: Resource.HashLockTable.name,
-				Item: {
-					contentHash: input.contentHash,
-					ttl: Math.floor(Date.now() / 1000) + 300,
-				},
-				ConditionExpression: "attribute_not_exists(contentHash)",
-			}),
-		);
-	} catch (error) {
-		if (error instanceof ConditionalCheckFailedException) {
-			throw new Error(
-				"This file is currently being uploaded by another process.",
-			);
-		}
-		throw error;
-	}
+  try {
+    await dynamo.send(
+        new PutCommand({
+          TableName: Resource.HashLockTable.name,
+          Item: {
+            contentHash: input.contentHash,
+            ttl: Math.floor(Date.now() / 1000) + 300,
+          },
+          ConditionExpression: "attribute_not_exists(contentHash)",
+        }),
+    );
+  } catch (error) {
+    if (error instanceof ConditionalCheckFailedException) {
+      throw new Error(
+          "This file is currently being uploaded by another process.",
+      );
+    }
+    throw error;
+  }
 
-	const documentId = randomUUID();
-	const sanitizedFileName = fileNameSchema.parse(input.fileName);
-	const s3Key = `${documentId}/${sanitizedFileName}`;
-	const command = new PutObjectCommand({
-		Bucket: Resource.Documents.name,
-		Key: s3Key,
-		ContentType: input.contentType,
-		ContentLength: input.size,
-	});
+  const documentId = randomUUID();
+  const sanitizedFileName = fileNameSchema.parse(input.fileName);
+  const s3Key = `${documentId}/${sanitizedFileName}`;
+  const command = new PutObjectCommand({
+    Bucket: Resource.Documents.name,
+    Key: s3Key,
+    ContentType: input.contentType,
+    ContentLength: input.size,
+  });
 
-	const uploadUrl = await getSignedUrl(s3, command, { expiresIn: 300 });
+  const uploadUrl = await getSignedUrl(s3, command, {expiresIn: 300});
 
-	return {
-		documentId,
-		s3Key,
-		uploadUrl,
-	};
+  return {
+    documentId,
+    s3Key,
+    uploadUrl,
+  };
 }
 
 export type UploadUrlResult =
-	| { tag: "success"; documentId: string; s3Key: string; uploadUrl: string }
-	| { tag: "error"; error: string };
+    | { tag: "success"; documentId: string; s3Key: string; uploadUrl: string }
+    | { tag: "error"; error: string };
 
 export async function createUploadUrls(
-	inputs: z.infer<typeof uploadRequestSchema>[],
+    inputs: z.infer<typeof uploadRequestSchema>[],
 ): Promise<UploadUrlResult[]> {
-	return Promise.all(
-		inputs.map(async (input) => {
-			try {
-				const result = await createUploadUrl(input);
-				return { tag: "success" as const, ...result };
-			} catch (caught) {
-				const message =
-					caught instanceof Error ? caught.message : "Upload failed.";
-				return { tag: "error" as const, error: message };
-			}
-		}),
-	);
+  return Promise.all(
+      inputs.map(async (input) => {
+        try {
+          const result = await createUploadUrl(input);
+          return {tag: "success" as const, ...result};
+        } catch (caught) {
+          const message =
+              caught instanceof Error ? caught.message : "Upload failed.";
+          return {tag: "error" as const, error: message};
+        }
+      }),
+  );
 }
 
 export async function saveDocumentRecord(
-	input: z.infer<typeof finalizeUploadSchema>,
+    input: z.infer<typeof finalizeUploadSchema>,
 ) {
-	const createdAt = new Date().toISOString();
-	const item: DocumentRecord = {
-		...input,
-		createdAt,
-	};
+  const createdAt = new Date().toISOString();
+  const item: DocumentRecord = {
+    ...input,
+    createdAt,
+  };
 
-	await dynamo.send(
-		new PutCommand({
-			TableName: Resource.DocumentsTable.name,
-			Item: item,
-			ConditionExpression: "attribute_not_exists(documentId)",
-		}),
-	);
+  await dynamo.send(
+      new PutCommand({
+        TableName: Resource.DocumentsTable.name,
+        Item: item,
+        ConditionExpression: "attribute_not_exists(documentId)",
+      }),
+  );
 
-	await dynamo.send(
-		new DeleteCommand({
-			TableName: Resource.HashLockTable.name,
-			Key: { contentHash: input.contentHash },
-		}),
-	);
+  await dynamo.send(
+      new DeleteCommand({
+        TableName: Resource.HashLockTable.name,
+        Key: {contentHash: input.contentHash},
+      }),
+  );
 
-	return item;
+  return item;
 }
 
 export async function savePaymentResult(
-	documentId: string,
-	result: PagoMovilPayment,
+    documentId: string,
+    result: PagoMovilPayment,
 ) {
-	await dynamo.send(
-		new UpdateCommand({
-			TableName: Resource.DocumentsTable.name,
-			Key: { documentId },
-			UpdateExpression: "SET paymentResult = :result",
-			ConditionExpression: "attribute_exists(documentId)",
-			ExpressionAttributeValues: {
-				":result": result,
-			},
-		}),
-	);
+  await dynamo.send(
+      new UpdateCommand({
+        TableName: Resource.DocumentsTable.name,
+        Key: {documentId},
+        UpdateExpression: "SET paymentResult = :result",
+        ConditionExpression: "attribute_exists(documentId)",
+        ExpressionAttributeValues: {
+          ":result": result,
+        },
+      }),
+  );
 }
 
 export async function saveTextractResult(
-	documentId: string,
-	result: TextractResult,
+    documentId: string,
+    result: TextractResult,
 ) {
-	await dynamo.send(
-		new UpdateCommand({
-			TableName: Resource.DocumentsTable.name,
-			Key: { documentId },
-			UpdateExpression:
-				"SET textractResult = :result, textractExtractedAt = :ts",
-			ExpressionAttributeValues: {
-				":result": result,
-				":ts": new Date().toISOString(),
-			},
-		}),
-	);
+  await dynamo.send(
+      new UpdateCommand({
+        TableName: Resource.DocumentsTable.name,
+        Key: {documentId},
+        UpdateExpression:
+            "SET textractResult = :result, textractExtractedAt = :ts",
+        ExpressionAttributeValues: {
+          ":result": result,
+          ":ts": new Date().toISOString(),
+        },
+      }),
+  );
 }
 
 export async function saveDoctrResult(documentId: string, result: DoctrResult) {
-	await dynamo.send(
-		new UpdateCommand({
-			TableName: Resource.DocumentsTable.name,
-			Key: { documentId },
-			UpdateExpression: "SET doctrResult = :result, doctrExtractedAt = :ts",
-			ConditionExpression: "attribute_exists(documentId)",
-			ExpressionAttributeValues: {
-				":result": result,
-				":ts": new Date().toISOString(),
-			},
-		}),
-	);
+  await dynamo.send(
+      new UpdateCommand({
+        TableName: Resource.DocumentsTable.name,
+        Key: {documentId},
+        UpdateExpression: "SET doctrResult = :result, doctrExtractedAt = :ts",
+        ConditionExpression: "attribute_exists(documentId)",
+        ExpressionAttributeValues: {
+          ":result": result,
+          ":ts": new Date().toISOString(),
+        },
+      }),
+  );
 }
 
 export async function getPresignedUrl(s3Key: string) {
-	const command = new GetObjectCommand({
-		Bucket: Resource.Documents.name,
-		Key: s3Key,
-	});
-	return getSignedUrl(s3, command, { expiresIn: 3600 });
+  const command = new GetObjectCommand({
+    Bucket: Resource.Documents.name,
+    Key: s3Key,
+  });
+  return getSignedUrl(s3, command, {expiresIn: 3600});
 }
 
 export async function getPresignedUrls(s3Keys: string[]) {
-	const entries = await Promise.all(
-		s3Keys.map(async (s3Key) => {
-			const url = await getPresignedUrl(s3Key);
-			return [s3Key, url] as const;
-		}),
-	);
-	return Object.fromEntries(entries);
+  const entries = await Promise.all(
+      s3Keys.map(async (s3Key) => {
+        const url = await getPresignedUrl(s3Key);
+        return [s3Key, url] as const;
+      }),
+  );
+  return Object.fromEntries(entries);
 }
 
 export async function listDocuments() {
-	const items: DocumentTableRecord[] = [];
-	let lastEvaluatedKey: Record<string, any> | undefined;
+  const items: DocumentTableRecord[] = [];
+  let lastEvaluatedKey: Record<string, any> | undefined;
 
-	do {
-		const response = await dynamo.send(
-			new ScanCommand({
-				TableName: Resource.DocumentsTable.name,
-				ProjectionExpression:
-					"documentId, fileName, s3Key, contentType, size, contentHash, createdAt, textractExtractedAt, doctrExtractedAt, paymentResult, inferenceHistory",
-				ExclusiveStartKey: lastEvaluatedKey,
-			}),
-		);
+  do {
+    const response = await dynamo.send(
+        new ScanCommand({
+          TableName: Resource.DocumentsTable.name,
+          ProjectionExpression:
+              "documentId, fileName, s3Key, contentType, size, contentHash, createdAt, paymentResult",
+          ExclusiveStartKey: lastEvaluatedKey,
+        }),
+    );
 
-		if (response.Items) {
-			const mapped = (response.Items as DocumentRecord[]).map(
-				(item) =>
-					({
-						...item,
-					}) satisfies DocumentTableRecord,
-			);
-			items.push(...mapped);
-		}
+    if (response.Items) {
+      const mapped = (response.Items as DocumentRecord[]).map(
+          (item) =>
+              ({
+                ...item,
+              }) satisfies DocumentTableRecord,
+      );
+      items.push(...mapped);
+    }
 
-		lastEvaluatedKey = response.LastEvaluatedKey;
-	} while (lastEvaluatedKey);
+    lastEvaluatedKey = response.LastEvaluatedKey;
+  } while (lastEvaluatedKey);
 
-	return items.sort((left, right) =>
-		right.createdAt.localeCompare(left.createdAt),
-	);
+  return items.sort((left, right) =>
+      right.createdAt.localeCompare(left.createdAt),
+  );
+}
+
+
+export async function listDocumentsWithUrls(): Promise<DocumentTableRecordWithUrl[]> {
+  const documents = await listDocuments();
+
+  return Promise.all(documents.map(async (doc) => {
+    const presignedUrl = await getPresignedUrl(doc.s3Key);
+    return {...doc, presignedUrl } satisfies DocumentTableRecordWithUrl;
+  }));
 }
 
 export async function getDocument(
-	documentId: string,
+    documentId: string,
 ): Promise<DocumentRecord | undefined> {
-	const response = await dynamo.send(
-		new GetCommand({
-			TableName: Resource.DocumentsTable.name,
-			Key: { documentId },
-		}),
-	);
-	return response.Item as DocumentRecord | undefined;
+  const response = await dynamo.send(
+      new GetCommand({
+        TableName: Resource.DocumentsTable.name,
+        Key: {documentId},
+      }),
+  );
+  return response.Item as DocumentRecord | undefined;
 }
 
 export async function deleteDocument(
-	input: z.infer<typeof deleteDocumentSchema>,
+    input: z.infer<typeof deleteDocumentSchema>,
 ) {
-	await Promise.all([
-		dynamo.send(
-			new DeleteCommand({
-				TableName: Resource.DocumentsTable.name,
-				Key: { documentId: input.documentId },
-			}),
-		),
-		s3.send(
-			new DeleteObjectCommand({
-				Bucket: Resource.Documents.name,
-				Key: input.s3Key,
-			}),
-		),
-	]);
+  await Promise.all([
+    dynamo.send(
+        new DeleteCommand({
+          TableName: Resource.DocumentsTable.name,
+          Key: {documentId: input.documentId},
+        }),
+    ),
+    s3.send(
+        new DeleteObjectCommand({
+          Bucket: Resource.Documents.name,
+          Key: input.s3Key,
+        }),
+    ),
+  ]);
 
-	return { success: true };
+  return {success: true};
 }
 
 export async function clearDocumentResults(documentIds: string[]) {
-	await Promise.all(
-		documentIds.map((documentId) =>
-			dynamo.send(
-				new UpdateCommand({
-					TableName: Resource.DocumentsTable.name,
-					Key: { documentId },
-					UpdateExpression:
-						"REMOVE inferenceHistory, textractResult, textractExtractedAt, doctrResult, doctrExtractedAt, paymentResult",
-				}),
-			),
-		),
-	);
-	return { success: true };
+  await Promise.all(
+      documentIds.map((documentId) =>
+          dynamo.send(
+              new UpdateCommand({
+                TableName: Resource.DocumentsTable.name,
+                Key: {documentId},
+                UpdateExpression:
+                    "REMOVE inferenceHistory, textractResult, textractExtractedAt, doctrResult, doctrExtractedAt, paymentResult",
+              }),
+          ),
+      ),
+  );
+  return {success: true};
 }
 
 export async function deleteDocuments(
-	inputs: z.infer<typeof deleteDocumentsSchema>,
+    inputs: z.infer<typeof deleteDocumentsSchema>,
 ) {
-	await Promise.all(inputs.map((input) => deleteDocument(input)));
-	return { success: true };
+  await Promise.all(inputs.map((input) => deleteDocument(input)));
+  return {success: true};
 }
 
 export async function exportDocumentsZip(): Promise<{
-	presignedUrl: string;
-	docSize: number;
+  presignedUrl: string;
+  docSize: number;
 }> {
-	const documents = await listDocuments();
+  const documents = await listDocuments();
 
-	const docsWithResults = documents.filter((doc) => doc.paymentResult);
+  const docsWithResults = documents.filter((doc) => doc.paymentResult);
 
-	console.log(
-		`Exporting ${docsWithResults.length} documents with results out of ${documents.length} total documents.`,
-	);
+  console.log(
+      `Exporting ${docsWithResults.length} documents with results out of ${documents.length} total documents.`,
+  );
 
-	const archive = new ZipArchive({ zlib: { level: 9 } });
-	const chunks: Buffer[] = [];
+  const archive = new ZipArchive({zlib: {level: 9}});
+  const chunks: Buffer[] = [];
 
-	archive.on("data", (chunk: Buffer) => chunks.push(chunk));
+  archive.on("data", (chunk: Buffer) => chunks.push(chunk));
 
-	for (const doc of docsWithResults) {
-		archive.append(
-			JSON.stringify(
-				{
-					fileName: doc.fileName,
-					fileSize: doc.size,
-					s3Key: doc.s3Key,
-					paymentResult: doc.paymentResult ?? null,
-					// inferenceHistory: doc.inferenceHistory ?? null,
-				},
-				null,
-				2,
-			),
-			{ name: `${doc.fileName}.json` },
-		);
-	}
+  for (const doc of docsWithResults) {
+    archive.append(
+        JSON.stringify(
+            {
+              fileName: doc.fileName,
+              fileSize: doc.size,
+              s3Key: doc.s3Key,
+              paymentResult: doc.paymentResult ?? null,
+              // inferenceHistory: doc.inferenceHistory ?? null,
+            },
+            null,
+            2,
+        ),
+        {name: `${doc.fileName}.json`},
+    );
+  }
 
-	await archive.finalize();
-	const zipBuffer = Buffer.concat(chunks);
+  await archive.finalize();
+  const zipBuffer = Buffer.concat(chunks);
 
-	const zipKey = `exports/documents-export-${Date.now()}.zip`;
+  const zipKey = `exports/documents-export-${Date.now()}.zip`;
 
-	await s3.send(
-		new PutObjectCommand({
-			Bucket: Resource.Documents.name,
-			Key: zipKey,
-			Body: zipBuffer,
-			ContentType: "application/zip",
-		}),
-	);
+  await s3.send(
+      new PutObjectCommand({
+        Bucket: Resource.Documents.name,
+        Key: zipKey,
+        Body: zipBuffer,
+        ContentType: "application/zip",
+      }),
+  );
 
-	const presignedUrl = await getSignedUrl(
-		s3,
-		new GetObjectCommand({
-			Bucket: Resource.Documents.name,
-			Key: zipKey,
-		}),
-		{ expiresIn: 3600 },
-	);
+  const presignedUrl = await getSignedUrl(
+      s3,
+      new GetObjectCommand({
+        Bucket: Resource.Documents.name,
+        Key: zipKey,
+      }),
+      {expiresIn: 3600},
+  );
 
-	return { presignedUrl, docSize: docsWithResults.length };
+  return {presignedUrl, docSize: docsWithResults.length};
 }

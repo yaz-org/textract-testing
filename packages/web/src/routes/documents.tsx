@@ -1,6 +1,5 @@
 import {
 	useMutation,
-	useQuery,
 	useQueryClient,
 	useSuspenseQuery,
 } from "@tanstack/react-query";
@@ -18,7 +17,7 @@ import {
 	clearStoredDocumentResults,
 	deleteStoredDocument,
 	exportDocumentsAsZip,
-	getDocumentPresignedUrls,
+	getDocumentRecord,
 	getDocuments,
 	processDocument,
 } from "#/lib/server-fns";
@@ -61,20 +60,10 @@ function DocumentsPage() {
 
 	const docs = documentsQuery.data;
 
-	const presignedUrlsQuery = useQuery({
-		queryKey: ["documents", "presignedUrls"],
-		queryFn: () => getDocumentPresignedUrls({ data: docs.map((d) => d.s3Key) }),
-		enabled: docs.length > 0,
-		staleTime: 30 * 60 * 1000,
-	});
-
 	const rows: DocumentRow[] = useMemo(
 		() =>
-			docs.map((doc) => ({
-				...doc,
-				presignedUrl: presignedUrlsQuery.data?.[doc.s3Key] ?? "",
-			})),
-		[docs, presignedUrlsQuery.data],
+			docs,
+		[docs],
 	);
 
 	const [pendingIds, setPendingIds] = useState<Set<string>>(new Set());
@@ -220,13 +209,33 @@ function DocumentsPage() {
 		? rows.findIndex((d) => d.documentId === previewDocument.documentId)
 		: -1;
 
+	const prefetchDocument = (documentId: string) => {
+		queryClient.prefetchQuery({
+			queryKey: ["document", documentId],
+			queryFn: () => getDocumentRecord({ data: documentId })
+      .then((doc) => {
+        if (doc?.presignedUrl) {
+          const img = new Image();
+          img.src = doc.presignedUrl;
+        }
+
+        return doc;
+      }),
+			staleTime: 5 * 60 * 1000,
+		});
+	};
+
 	const goToPrev = () => {
-		if (currentIndex > 0) setPreviewDocument(rows[currentIndex - 1]);
+		if (currentIndex > 0) {
+			setPreviewDocument(rows[currentIndex - 1]);
+			if (currentIndex - 2 >= 0) prefetchDocument(rows[currentIndex - 2].documentId);
+		}
 	};
 
 	const goToNext = () => {
 		if (currentIndex < rows.length - 1) {
 			setPreviewDocument(rows[currentIndex + 1]);
+			if (currentIndex + 2 < rows.length) prefetchDocument(rows[currentIndex + 2].documentId);
 		}
 	};
 
@@ -235,6 +244,7 @@ function DocumentsPage() {
 			<DocumentsTable
 				data={rows}
 				onDelete={handleDelete}
+				onPrefetchDocument={prefetchDocument}
 				onPreviewSelected={(document) => {
 					setPreviewDocument(document);
 					setDialogOpen(true);
