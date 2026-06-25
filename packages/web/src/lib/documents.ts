@@ -248,13 +248,25 @@ export async function getPresignedUrl(s3Key: string) {
 }
 
 export async function listDocuments() {
-	const response = await dynamo.send(
-		new ScanCommand({
-			TableName: Resource.DocumentsTable.name,
-		}),
-	);
+	const items: DocumentRecord[] = [];
+	let lastEvaluatedKey: Record<string, any> | undefined;
 
-	return ((response.Items ?? []) as DocumentRecord[]).sort((left, right) =>
+	do {
+		const response = await dynamo.send(
+			new ScanCommand({
+				TableName: Resource.DocumentsTable.name,
+				ExclusiveStartKey: lastEvaluatedKey,
+			}),
+		);
+
+		if (response.Items) {
+			items.push(...(response.Items as DocumentRecord[]));
+		}
+
+		lastEvaluatedKey = response.LastEvaluatedKey;
+	} while (lastEvaluatedKey);
+
+	return items.sort((left, right) =>
 		right.createdAt.localeCompare(left.createdAt),
 	);
 }
@@ -289,6 +301,22 @@ export async function deleteDocument(
 		),
 	]);
 
+	return { success: true };
+}
+
+export async function clearDocumentResults(documentIds: string[]) {
+	await Promise.all(
+		documentIds.map((documentId) =>
+			dynamo.send(
+				new UpdateCommand({
+					TableName: Resource.DocumentsTable.name,
+					Key: { documentId },
+					UpdateExpression:
+						"REMOVE inferenceHistory, textractResult, textractExtractedAt, doctrResult, doctrExtractedAt, paymentResult",
+				}),
+			),
+		),
+	);
 	return { success: true };
 }
 

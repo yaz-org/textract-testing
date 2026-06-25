@@ -1,16 +1,15 @@
-import { InvokeCommand, LambdaClient } from "@aws-sdk/client-lambda";
 import { SendMessageCommand, SQSClient } from "@aws-sdk/client-sqs";
 import { createServerFn } from "@tanstack/react-start";
 import { Resource } from "sst";
 import { z } from "zod";
 import type { UploadUrlResult } from "./documents";
 import {
+	clearDocumentResults,
 	createUploadUrls,
 	deleteDocuments,
 	deleteDocumentsSchema,
 	exportDocumentsZip,
 	finalizeUploadSchema,
-	getDocument,
 	getPresignedUrl,
 	listDocuments,
 	saveDocumentRecord,
@@ -18,7 +17,6 @@ import {
 } from "./documents";
 
 const sqs = new SQSClient({});
-const lambda = new LambdaClient({});
 
 export const getDocuments = createServerFn({ method: "GET" }).handler(
 	async () => {
@@ -56,15 +54,17 @@ export const processDocument = createServerFn({ method: "POST" })
 	)
 	.handler(async ({ data }) => {
 		await Promise.all(
-			data.map(({ documentId, s3Key }) =>
-				sqs.send(
+			data.map(async ({ documentId, s3Key }) => {
+				const downloadUrl = await getPresignedUrl(s3Key);
+				const callbackUrl = `${Resource.ProcessDocumentFn.url}/documents/${documentId}`;
+				await sqs.send(
 					new SendMessageCommand({
 						QueueUrl: Resource.DocumentQueue.url,
-						MessageBody: JSON.stringify({ documentId, s3Key }),
+						MessageBody: JSON.stringify({ downloadUrl, callbackUrl }),
 						MessageGroupId: "documents",
 					}),
-				),
-			),
+				);
+			}),
 		);
 		return data.map(({ documentId }) => ({
 			documentId,
@@ -72,47 +72,10 @@ export const processDocument = createServerFn({ method: "POST" })
 		}));
 	});
 
-export const reprocessPayment = createServerFn({ method: "POST" })
-	.validator(z.object({ documentId: z.string().uuid() }))
+export const clearStoredDocumentResults = createServerFn({ method: "POST" })
+	.validator(z.array(z.object({ documentId: z.string().uuid() })))
 	.handler(async ({ data }) => {
-		const doc = await getDocument(data.documentId);
-		if (!doc) {
-			throw new Error("No document found");
-		}
-		await sqs.send(
-			new SendMessageCommand({
-				QueueUrl: Resource.DocumentQueue.url,
-				MessageBody: JSON.stringify({
-					documentId: doc.documentId,
-					s3Key: doc.s3Key,
-				}),
-				MessageGroupId: "documents",
-			}),
-		);
-		return { success: true as const };
-	});
-
-export const runOnnxrtInference = createServerFn({ method: "POST" })
-	.validator(z.object({ documentId: z.string().uuid() }))
-	.handler(async ({ data }) => {
-		const doc = await getDocument(data.documentId);
-		if (!doc) {
-			throw new Error("No document found");
-		}
-
-		const command = new InvokeCommand({
-			FunctionName: Resource.OnnxTRFunction.name,
-			Payload: JSON.stringify({ s3Key: doc.s3Key }),
-		});
-
-		const response = await lambda.send(command);
-		const payload = JSON.parse(new TextDecoder().decode(response.Payload));
-
-		if (response.FunctionError) {
-			throw new Error(`OnnxTR error: ${JSON.stringify(payload)}`);
-		}
-
-		return payload;
+		return clearDocumentResults(data.map((d) => d.documentId));
 	});
 
 export const exportDocumentsAsZip = createServerFn({ method: "POST" }).handler(

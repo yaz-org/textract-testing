@@ -1,103 +1,68 @@
-import { InvokeCommand, LambdaClient } from "@aws-sdk/client-lambda";
 import { Resource } from "sst";
-import { extractDocTRPayment, extractOnnxTRPayment, saveInference } from "@textract-testing/shared";
-import type { DocTRRawInference, OnnxTRRawInference, InferenceRecord } from "@textract-testing/shared";
+import { extractOnnxTRPayment, saveInference } from "@textract-testing/shared";
+import type { OnnxTRRawInference, InferenceRecord } from "@textract-testing/shared";
 
-const lambda = new LambdaClient({});
-
-interface SqsRecord {
-  messageId: string;
-  receiptHandle: string;
-  body: string;
+interface FunctionUrlEvent {
+  httpMethod: string;
+  path: string;
+  body?: string;
+  headers: Record<string, string>;
+  requestContext: {
+    domainName: string;
+    http: { method: string; path: string };
+  };
 }
 
-interface SqsEvent {
-  Records: SqsRecord[];
+interface CallbackPayload {
+  success: boolean;
+  inferenceType?: string;
+  extractedAt?: string;
+  pageCount?: number;
+  pages?: unknown[];
+  fullText?: string;
+  averageConfidence?: number | null;
+  inferenceTimeMs?: number;
+  modelInfo?: { detArch: string; recoArch: string };
+  error?: string;
 }
 
-interface BatchItemFailure {
-  itemIdentifier: string;
-}
-
-interface SqsResponse {
-  batchItemFailures: BatchItemFailure[];
-}
-
-interface ProcessMessage {
-  documentId: string;
-  s3Key: string;
-  model?: "doctr" | "onnxtr";
-}
-
-async function processDocument(documentId: string, s3Key: string, model: "doctr" | "onnxtr" = "onnxtr") {
-  const functionName = model === "doctr"
-    ? Resource.DoctrFunction.name
-    : Resource.OnnxTRFunction.name;
-
-  const command = new InvokeCommand({
-    FunctionName: functionName,
-    Payload: JSON.stringify({
-      documentId,
-      s3Key,
-      bucket: Resource.Documents.name,
-    }),
-  });
-
-  const response = await lambda.send(command);
-  const payload = JSON.parse(
-    new TextDecoder().decode(response.Payload),
-  );
-
-  if (response.FunctionError) {
-    console.log("Error", response.FunctionError, payload);
-    throw new Error(
-      `${model} function error: ${JSON.stringify(payload)}`,
-    );
+export const handler = async (event: FunctionUrlEvent) => {
+  const match = event.path.match(/\/documents\/([^/]+)/);
+  const documentId = match?.[1];
+  if (!documentId) {
+    return {
+      statusCode: 400,
+      body: JSON.stringify({ error: "Missing documentId in path" }),
+      headers: { "Content-Type": "application/json" },
+    };
   }
 
-  let rawInference: DocTRRawInference | OnnxTRRawInference;
-  let payment;
+  const payload: CallbackPayload = JSON.parse(event.body || "{}");
 
-  if (model === "doctr") {
-    rawInference = payload as DocTRRawInference;
-    payment = extractDocTRPayment(rawInference.allLines);
-  } else {
-    rawInference = payload as OnnxTRRawInference;
-    payment = extractOnnxTRPayment(rawInference);
+  if (!payload.success) {
+    console.error(`OCR failed for ${documentId}:`, payload.error);
+    return {
+      statusCode: 200,
+      body: JSON.stringify({ received: true }),
+      headers: { "Content-Type": "application/json" },
+    };
   }
+
+  const rawInference = payload as unknown as OnnxTRRawInference;
+  const payment = extractOnnxTRPayment(rawInference);
 
   const inferenceRecord: InferenceRecord = {
-    inferenceType: model,
-    extractedAt: rawInference.extractedAt,
+    inferenceType: "onnxtr",
+    extractedAt: payload.extractedAt || new Date().toISOString(),
     raw: rawInference,
     payment,
   };
 
   await saveInference(documentId, inferenceRecord);
 
-  return inferenceRecord;
-}
-
-export const handler = async (event: SqsEvent): Promise<SqsResponse> => {
-  const batchItemFailures: BatchItemFailure[] = [];
-
-  for (const record of event.Records) {
-    try {
-      const message: ProcessMessage = JSON.parse(record.body);
-      const { documentId, s3Key, model } = message;
-
-      if (!documentId || !s3Key) {
-        console.error("Missing documentId or s3Key in message", record.body);
-        batchItemFailures.push({ itemIdentifier: record.messageId });
-        continue;
-      }
-
-      await processDocument(documentId, s3Key, model ?? "onnxtr");
-    } catch (error) {
-      console.error("Failed to process record", record.messageId, error);
-      batchItemFailures.push({ itemIdentifier: record.messageId });
-    }
-  }
-
-  return { batchItemFailures };
+  return {
+    statusCode: 200,
+    body: JSON.stringify({ received: true }),
+    headers: { "Content-Type": "application/json" },
+  };
 };

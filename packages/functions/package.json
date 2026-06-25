@@ -4,7 +4,6 @@
   "scripts": {},
   "dependencies": {
     "@aws-sdk/client-dynamodb": "*",
-    "@aws-sdk/client-lambda": "*",
     "@aws-sdk/lib-dynamodb": "*",
     "@textract-testing/shared": "*",
     "sst": "*"

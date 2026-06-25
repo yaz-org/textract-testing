@@ -7,4 +7,5 @@ dependencies = [
     "onnxtr[cpu-headless]>=0.8",
     "boto3",
     "pillow",
+    "requests",
 ]

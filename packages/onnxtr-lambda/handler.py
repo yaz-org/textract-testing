@@ -2,19 +2,18 @@ import json
 import os
 import time
 import traceback
+import uuid
 from datetime import datetime
 from pathlib import Path
 
-import boto3
+import requests
 from onnxtr.io import DocumentFile
 
 _model = None
 _DET_ARCH = "db_resnet50"
 _RECO_ARCH = "parseq"
 
-s3 = boto3.client("s3")
 ONNXTR_CACHE_DIR = os.getenv("ONNXTR_CACHE_DIR", "/tmp/onnxtr_cache")
-DOCUMENTS_BUCKET = os.getenv("DOCUMENTS_BUCKET_NAME", "")
 
 
 def get_model():
@@ -122,67 +121,104 @@ def _page_to_dict(page):
 
 
 def lambda_handler(event, context):
-    s3_key = event["s3Key"]
-    bucket = event.get("bucket", DOCUMENTS_BUCKET)
-    print(json.dumps({"level": "INFO", "message": "Processing document", "s3Key": s3_key, "bucket": bucket}))
+    batch_item_failures = []
 
-    start = time.time()
-    tmp_path = None
+    for record in event["Records"]:
+        tmp_path = None
+        try:
+            body = json.loads(record["body"])
+            download_url = body["downloadUrl"]
+            callback_url = body["callbackUrl"]
 
-    try:
-        tmp_path = f"/tmp/{Path(s3_key).name}"
-        s3.download_file(bucket, s3_key, tmp_path)
+            print(json.dumps({
+                "level": "INFO",
+                "message": "Downloading document",
+                "downloadUrl": download_url,
+                "callbackUrl": callback_url,
+            }))
 
-        doc = DocumentFile.from_images(tmp_path)
-        result = get_model()(doc)
+            start = time.time()
 
-        pages = [_page_to_dict(p) for p in result.pages]
-        full_text = "\n".join(p["text"] for p in pages)
+            resp = requests.get(download_url, timeout=120)
+            resp.raise_for_status()
 
-        confidences = [word.confidence for p in result.pages
-                       for block in p.blocks
-                       for line in block.lines
-                       for word in line.words
-                       if word.confidence is not None]
+            tmp_path = f"/tmp/{uuid.uuid4()}_{Path(download_url).name}"
+            with open(tmp_path, "wb") as f:
+                f.write(resp.content)
 
-        avg_conf = sum(confidences) / len(confidences) if confidences else None
+            doc = DocumentFile.from_images(tmp_path)
+            result = get_model()(doc)
 
-        print(json.dumps({
-            "level": "INFO",
-            "message": "Document processed",
-            "s3Key": s3_key,
-            "inferenceTimeMs": int((time.time() - start) * 1000),
-            "pageCount": len(pages),
-            "averageConfidence": avg_conf,
-        }))
+            pages = [_page_to_dict(p) for p in result.pages]
+            full_text = "\n".join(p["text"] for p in pages)
 
-        return {
-            "inferenceType": "onnxtr",
-            "extractedAt": datetime.utcnow().isoformat() + "Z",
-            "pageCount": len(pages),
-            "pages": pages,
-            "fullText": full_text,
-            "averageConfidence": avg_conf,
-            "inferenceTimeMs": int((time.time() - start) * 1000),
-            "modelInfo": {
-                "detArch": _DET_ARCH,
-                "recoArch": _RECO_ARCH,
-            },
-        }
+            confidences = [word.confidence for p in result.pages
+                           for block in p.blocks
+                           for line in block.lines
+                           for word in line.words
+                           if word.confidence is not None]
 
-    except Exception:
-        print(json.dumps({
-            "level": "ERROR",
-            "message": "Document processing failed",
-            "s3Key": s3_key,
-            "duration_seconds": round(time.time() - start, 3),
-            "exception": traceback.format_exc(),
-        }))
-        raise
+            avg_conf = sum(confidences) / len(confidences) if confidences else None
 
-    finally:
-        if tmp_path and os.path.exists(tmp_path):
+            inference_ms = int((time.time() - start) * 1000)
+
+            print(json.dumps({
+                "level": "INFO",
+                "message": "Document processed",
+                "inferenceTimeMs": inference_ms,
+                "pageCount": len(pages),
+                "averageConfidence": avg_conf,
+            }))
+
+            payload = {
+                "success": True,
+                "inferenceType": "onnxtr",
+                "extractedAt": datetime.utcnow().isoformat() + "Z",
+                "pageCount": len(pages),
+                "pages": pages,
+                "fullText": full_text,
+                "averageConfidence": avg_conf,
+                "inferenceTimeMs": inference_ms,
+                "modelInfo": {
+                    "detArch": _DET_ARCH,
+                    "recoArch": _RECO_ARCH,
+                },
+            }
+
+            resp_callback = requests.post(
+                callback_url,
+                json=payload,
+                timeout=30,
+                headers={"Content-Type": "application/json"},
+            )
+            resp_callback.raise_for_status()
+
+        except Exception:
+            error_payload = {
+                "success": False,
+                "error": traceback.format_exc(),
+            }
+            print(json.dumps({
+                "level": "ERROR",
+                "message": "Document processing failed",
+                "error": traceback.format_exc(),
+            }))
             try:
-                os.remove(tmp_path)
+                requests.post(
+                    callback_url,
+                    json=error_payload,
+                    timeout=10,
+                    headers={"Content-Type": "application/json"},
+                )
             except Exception:
                 pass
+            batch_item_failures.append({"itemIdentifier": record["messageId"]})
+
+        finally:
+            if tmp_path and os.path.exists(tmp_path):
+                try:
+                    os.remove(tmp_path)
+                except Exception:
+                    pass
+
+    return {"batchItemFailures": batch_item_failures}

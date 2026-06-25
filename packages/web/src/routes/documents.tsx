@@ -14,6 +14,7 @@ import { PreviewDialog } from "#/components/documents/preview-dialog.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import type { DocumentRecord } from "#/lib/documents";
 import {
+	clearStoredDocumentResults,
 	deleteStoredDocument,
 	exportDocumentsAsZip,
 	getDocuments,
@@ -158,6 +159,22 @@ function DocumentsPage() {
 		},
 	});
 
+	const clearResultsMutation = useMutation({
+		mutationFn: (items: { documentId: string }[]) =>
+			clearStoredDocumentResults({ data: items }),
+		onSuccess: async (_data, variables) => {
+			await queryClient.invalidateQueries({ queryKey: ["documents"] });
+			toast.success(
+				`Results cleared for ${variables.length} document${variables.length === 1 ? "" : "s"}.`,
+			);
+		},
+		onError: (caught) => {
+			setError(
+				caught instanceof Error ? caught.message : "Clear results failed.",
+			);
+		},
+	});
+
 	function handleExportZip() {
 		exportZipMutation.mutate();
 	}
@@ -179,6 +196,10 @@ function DocumentsPage() {
 	) {
 		await processMutation.mutateAsync(items);
 		setPendingIds(new Set());
+	}
+
+	function handleClearResults(items: { documentId: string }[]) {
+		clearResultsMutation.mutate(items);
 	}
 
 	const docs = documentsQuery.data;
@@ -208,6 +229,7 @@ function DocumentsPage() {
 				}}
 				onDeleteSelected={handleDeleteSelected}
 				onProcessSelected={handleProcessSelected}
+				onClearResults={handleClearResults}
 				onExportZip={handleExportZip}
 				exportingZip={exportZipMutation.isPending}
 				pendingIds={pendingIds}

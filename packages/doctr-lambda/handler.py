@@ -80,6 +80,7 @@ def lambda_handler(event, context):
     start = time.time()
     start_ms = int(time.time() * 1000)
     handler_steps = {}
+    tmp_path = None
     try:
         t1 = time.time()
         from doctr.io import DocumentFile
@@ -130,3 +131,10 @@ def lambda_handler(event, context):
         duration = round(time.time() - start, 3)
         print(json.dumps({"level": "ERROR", "message": "Document processing failed", "s3Key": s3_key, "bucket": bucket, "duration_seconds": duration, "exception": traceback.format_exc()}))
         raise
+
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except Exception:
+                pass

@@ -26,7 +26,7 @@ import {
 import { _BANKS } from "#/lib/banks";
 import { formatBytes, formatDate } from "#/lib/format";
 import type { DocTRRawInference, OnnxTRRawInference } from "#/lib/payment";
-import { reprocessPayment, runOnnxrtInference } from "#/lib/server-fns";
+import { processDocument } from "#/lib/server-fns";
 import type { DocumentRow } from "./columns";
 
 interface PreviewDialogProps {
@@ -89,33 +89,14 @@ export function PreviewDialog({
 	const queryClient = useQueryClient();
 
 	const reprocessMutation = useMutation({
-		mutationFn: (input: { documentId: string }) =>
-			reprocessPayment({ data: input }),
-		onSuccess: async (res) => {
-			console.log("onSuccess", res);
-		},
+		mutationFn: (input: { documentId: string; s3Key: string }) =>
+			processDocument({ data: [input] }),
 		onSettled: async () => {
 			await queryClient.invalidateQueries({ queryKey: ["documents"] });
 		},
 		onError: (error) => {
-			console.log("OnError", error);
 			toast.error(
 				error instanceof Error ? error.message : "Reprocessing failed.",
-			);
-		},
-	});
-
-	const onnxrtMutation = useMutation({
-		mutationFn: (input: { documentId: string }) =>
-			runOnnxrtInference({ data: input }),
-		onSuccess: async (res) => {
-			console.log("OnnxTR success", res);
-			toast.success("OnnxTR inference complete");
-		},
-		onError: (error) => {
-			console.log("OnnxTR error", error);
-			toast.error(
-				error instanceof Error ? error.message : "OnnxTR inference failed.",
 			);
 		},
 	});
@@ -169,6 +150,7 @@ export function PreviewDialog({
 									onClick={() =>
 										reprocessMutation.mutate({
 											documentId: previewDocument.documentId,
+											s3Key: previewDocument.s3Key,
 										})
 									}
 									disabled={reprocessMutation.isPending}
@@ -178,32 +160,8 @@ export function PreviewDialog({
 									) : (
 										<ScanText className="size-4" />
 									)}
-									Process again
+									Run OCR
 								</Button>
-								<Button
-									type="button"
-									variant="outline"
-									size="sm"
-									className="w-full gap-1.5"
-									onClick={() =>
-										onnxrtMutation.mutate({
-											documentId: previewDocument.documentId,
-										})
-									}
-									disabled={onnxrtMutation.isPending}
-								>
-									{onnxrtMutation.isPending ? (
-										<Loader2 className="size-4 animate-spin" />
-									) : (
-										<ScanText className="size-4" />
-									)}
-									Run OnnxTR
-								</Button>
-								{onnxrtMutation.data && (
-									<pre className="max-h-48 overflow-auto rounded bg-slate-50 p-2 text-xs font-mono whitespace-pre-wrap">
-										{JSON.stringify(onnxrtMutation.data, null, 2)}
-									</pre>
-								)}
 								<div className="space-y-1 text-sm">
 									<p className="text-muted-foreground">Type</p>
 									<p>{previewDocument.contentType}</p>
@@ -229,20 +187,10 @@ export function PreviewDialog({
 											{latestInference && (
 												<p className="text-xs text-muted-foreground">
 													Engine:{" "}
-													{latestInference.inferenceType === "doctr"
-														? "docTR"
-														: "Textract"}
+													{latestInference.inferenceType}
 													{" · "}
 													Confidence:{" "}
-													{latestInference.inferenceType === "doctr"
-														? `${(
-																(
-																	latestInference.raw as {
-																		averageConfidence?: number;
-																	}
-																).averageConfidence ?? 100
-															).toFixed(3)}%`
-														: "—"}
+                          {`${latestInference.raw.averageConfidence?.toFixed(3)}%`}
 												</p>
 											)}
 											<dl className="grid grid-cols-1 gap-x-4 gap-y-2 text-sm sm:grid-cols-2">

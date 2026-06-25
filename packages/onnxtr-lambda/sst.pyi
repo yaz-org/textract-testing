@@ -28,6 +28,10 @@ class Resource:
     class OnnxTRFunction:
         name: str
         type: str
+    class ProcessDocumentFn:
+        name: str
+        type: str
+        url: str
     class Web:
         type: str
         url: str

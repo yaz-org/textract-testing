@@ -105,6 +105,8 @@ export type DocTRRawInference = {
 export type TextractRawInference = {
 	inferenceType: "textract";
 	extractedAt: string;
+  averageConfidence: number | null;
+  inferenceTimeMs: number;
 	layout: { blockType: string; text: string; confidence: number }[];
 	forms: { key: string; value: string; confidence: number }[];
 };

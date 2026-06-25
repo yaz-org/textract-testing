@@ -34,6 +34,11 @@ declare module "sst" {
       "name": string
       "type": "sst.aws.Function"
     }
+    "ProcessDocumentFn": {
+      "name": string
+      "type": "sst.aws.Function"
+      "url": string
+    }
     "Web": {
       "type": "sst.aws.TanstackStart"
       "url": string

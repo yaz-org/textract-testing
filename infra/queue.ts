@@ -1,6 +1,5 @@
-import { documentsBucket, documentsTable } from "./storage";
-import { doctrFunction } from "./doctr";
 import { onnxtrFunction } from "./onnxtr";
+import { processDocumentFn } from "./callback";
 
 const dlq = new sst.aws.Queue("DocumentDLQ", { fifo: true });
 
@@ -8,7 +7,7 @@ export const documentQueue = new sst.aws.Queue("DocumentQueue", {
   fifo: {
     contentBasedDeduplication: true,
   },
-  visibilityTimeout: "3 minutes",
+  visibilityTimeout: "4 minutes",
   dlq: {
     queue: dlq.arn,
     retry: 3,
@@ -16,14 +15,15 @@ export const documentQueue = new sst.aws.Queue("DocumentQueue", {
 });
 
 documentQueue.subscribe({
-  handler: "packages/functions/src/process-document.handler",
-  timeout: "60 seconds",
-  memory: "128 MB",
-  link: [documentsBucket, documentsTable, doctrFunction, onnxtrFunction],
-  permissions: [
-    {
-      actions: ["lambda:InvokeFunction"],
-      resources: [doctrFunction.arn, onnxtrFunction.arn],
-    },
-  ],
+  handler: "packages/onnxtr-lambda/handler.lambda_handler",
+  runtime: "python3.14",
+  python: { container: true },
+  timeout: "3 minutes",
+  memory: "2048 MB",
+  environment: {
+    ONNXTR_CACHE_DIR: "/tmp/onnxtr_cache",
+    ONNXTR_MULTIPROCESSING_DISABLE: "TRUE",
+  },
 });
+
+export { processDocumentFn };

@@ -6,7 +6,7 @@ import {
 	useReactTable,
 } from "@tanstack/react-table";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { Download, Loader2, ScanText, Trash2 } from "lucide-react";
+import { Download, Eraser, Loader2, ScanText, Trash2 } from "lucide-react";
 import { useRef, useState } from "react";
 import { Button } from "#/components/ui/button.tsx";
 import {
@@ -28,6 +28,7 @@ interface DocumentsTableProps {
 	onProcessSelected: (
 		items: { documentId: string; s3Key: string }[],
 	) => Promise<void>;
+	onClearResults: (items: { documentId: string }[]) => void;
 	onExportZip: () => void;
 	exportingZip: boolean;
 	pendingIds: Set<string>;
@@ -41,6 +42,7 @@ export function DocumentsTable({
 	onPreviewSelected,
 	onDeleteSelected,
 	onProcessSelected,
+	onClearResults,
 	onExportZip,
 	exportingZip,
 	pendingIds,
@@ -101,6 +103,13 @@ export function DocumentsTable({
 		setRowSelection({});
 	}
 
+	function handleClearResults() {
+		const selectedItems = table.getSelectedRowModel().rows.map((row) => ({
+			documentId: row.original.documentId,
+		}));
+		onClearResults(selectedItems);
+	}
+
 	const selectedCount = Object.keys(rowSelection).length;
 	const hasExtractedResults = data.some((doc) => doc.paymentResult);
 
@@ -127,6 +136,17 @@ export function DocumentsTable({
 								<ScanText className="mr-1" />
 							)}
 							Extract text
+						</Button>
+					)}
+					{selectedCount > 0 && (
+						<Button
+							type="button"
+							variant="outline"
+							size="sm"
+							onClick={handleClearResults}
+						>
+							<Eraser className="mr-1" />
+							Clear results
 						</Button>
 					)}
 					{selectedCount > 0 && (
