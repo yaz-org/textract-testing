@@ -21,10 +21,11 @@
       "name": "@textract-testing/functions",
       "dependencies": {
         "@aws-sdk/client-dynamodb": "*",
-        "@aws-sdk/client-lambda": "*",
+        "@aws-sdk/client-sqs": "*",
         "@aws-sdk/lib-dynamodb": "*",
         "@textract-testing/shared": "*",
         "sst": "*",
+        "zod": "*",
       },
       "devDependencies": {
         "@types/node": "^22",

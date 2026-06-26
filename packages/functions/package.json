@@ -4,9 +4,11 @@
   "scripts": {},
   "dependencies": {
     "@aws-sdk/client-dynamodb": "*",
+    "@aws-sdk/client-sqs": "*",
     "@aws-sdk/lib-dynamodb": "*",
     "@textract-testing/shared": "*",
-    "sst": "*"
+    "sst": "*",
+    "zod": "*"
   },
   "devDependencies": {
     "@types/node": "^22",
