@@ -16,51 +16,28 @@ import {
 	TableHeader,
 	TableRow,
 } from "#/components/ui/table.tsx";
-import type { DocumentTableRecord } from "#/lib/documents";
 import { cn } from "#/lib/utils";
-import { type DocumentRow, getColumns } from "./columns";
+import { getColumns } from "./columns";
+import { useDocumentsContext } from "./documents-context";
 
-interface DocumentsTableProps {
-	data: DocumentRow[];
-	onDelete: (document: DocumentTableRecord) => void;
-	onPreviewSelected: (document: DocumentRow) => void;
-	onPrefetchDocument?: (documentId: string) => void;
-	onDeleteSelected: (items: { documentId: string; s3Key: string }[]) => void;
-	onProcessSelected: (
-		items: { documentId: string; s3Key: string }[],
-	) => Promise<void>;
-	onClearResults: (items: { documentId: string }[]) => void;
-	onExportZip: () => void;
-	exportingZip: boolean;
-	pendingIds: Set<string>;
-	processing: boolean;
-	error: string | null;
-}
+export function DocumentsTable() {
+	const {
+		rows: data,
+		handleDeleteSelected,
+		handleProcessSelected,
+		handleClearResults,
+		handleExportZip,
+		exportingZip,
+		pendingIds,
+		processing,
+		error,
+	} = useDocumentsContext();
 
-export function DocumentsTable({
-	data,
-	onDelete,
-	onPreviewSelected,
-	onPrefetchDocument,
-	onDeleteSelected,
-	onProcessSelected,
-	onClearResults,
-	onExportZip,
-	exportingZip,
-	pendingIds,
-	processing,
-	error,
-}: DocumentsTableProps) {
 	const [sorting, setSorting] = useState<SortingState>([]);
 	const [rowSelection, setRowSelection] = useState({});
 	const tableContainerRef = useRef<HTMLDivElement>(null);
 
-	const columns = getColumns({
-		onPreviewSelected,
-		onPrefetchDocument,
-		onDelete,
-		hasDocId: (docId) => pendingIds.has(docId),
-	});
+	const columns = getColumns();
 
 	const table = useReactTable({
 		data,
@@ -97,20 +74,20 @@ export function DocumentsTable({
 		}));
 	}
 
-	async function handleDeleteSelected() {
-		onDeleteSelected(extractSelectedItems());
+	async function onDeleteSelected() {
+		handleDeleteSelected(extractSelectedItems());
 	}
 
-	async function handleProcessSelected() {
-		await onProcessSelected(extractSelectedItems());
+	async function onProcessSelected() {
+		await handleProcessSelected(extractSelectedItems());
 		setRowSelection({});
 	}
 
-	function handleClearResults() {
+	function onClearResultsSelected() {
 		const selectedItems = table.getSelectedRowModel().rows.map((row) => ({
 			documentId: row.original.documentId,
 		}));
-		onClearResults(selectedItems);
+		handleClearResults(selectedItems);
 	}
 
 	const selectedCount = Object.keys(rowSelection).length;
@@ -130,7 +107,7 @@ export function DocumentsTable({
 							type="button"
 							variant="default"
 							size="sm"
-							onClick={handleProcessSelected}
+							onClick={onProcessSelected}
 							disabled={processing}
 						>
 							{processing ? (
@@ -146,7 +123,7 @@ export function DocumentsTable({
 							type="button"
 							variant="outline"
 							size="sm"
-							onClick={handleClearResults}
+							onClick={onClearResultsSelected}
 						>
 							<Eraser className="mr-1" />
 							Clear results
@@ -157,7 +134,7 @@ export function DocumentsTable({
 							type="button"
 							variant="destructive"
 							size="sm"
-							onClick={handleDeleteSelected}
+							onClick={onDeleteSelected}
 							disabled={pendingIds.size > 0}
 						>
 							{pendingIds.size > 0 ? (
@@ -173,7 +150,7 @@ export function DocumentsTable({
 						type="button"
 						variant="outline"
 						size="sm"
-						onClick={onExportZip}
+						onClick={handleExportZip}
 						disabled={!hasExtractedResults || exportingZip}
 					>
 						{exportingZip ? (

@@ -2,7 +2,7 @@ import { SendMessageCommand, SQSClient } from "@aws-sdk/client-sqs";
 import { createServerFn } from "@tanstack/react-start";
 import { Resource } from "sst";
 import { z } from "zod";
-import type { UploadUrlResult} from "./documents";
+import type { UploadUrlResult } from "./documents";
 import {
 	clearDocumentResults,
 	createUploadUrls,
@@ -12,7 +12,7 @@ import {
 	finalizeUploadSchema,
 	getDocument,
 	getPresignedUrl,
-  listDocumentsWithUrls,
+	listDocumentsWithUrls,
 	saveDocumentRecord,
 	uploadRequestSchema,
 } from "./documents";
@@ -33,7 +33,6 @@ export const getDocumentRecord = createServerFn({ method: "GET" })
 		const presignedUrl = await getPresignedUrl(doc.s3Key);
 		return { ...doc, presignedUrl };
 	});
-
 
 export const createDocumentUpload = createServerFn({ method: "POST" })
 	.validator(z.array(uploadRequestSchema))

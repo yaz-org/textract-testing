@@ -1,4 +1,4 @@
-import { createColumnHelper } from "@tanstack/react-table";
+import { createColumnHelper, type Row } from "@tanstack/react-table";
 import { Loader2, Trash2 } from "lucide-react";
 import { Badge } from "#/components/ui/badge.tsx";
 import { Button } from "#/components/ui/button.tsx";
@@ -9,25 +9,58 @@ import {
 	TooltipContent,
 	TooltipTrigger,
 } from "#/components/ui/tooltip.tsx";
-import type {DocumentRecord, DocumentTableRecord} from "#/lib/documents";
+import type { DocumentTableRecord } from "#/lib/documents";
 import { formatBytes, formatDate } from "#/lib/format";
+import { useDocumentsContext } from "./documents-context";
 import { SortHeader } from "./sort-header";
 
 export type DocumentRow = DocumentTableRecord & { presignedUrl: string };
 
 const columnHelper = createColumnHelper<DocumentRow>();
 
-export function getColumns({
-	onDelete,
-	onPreviewSelected,
-	onPrefetchDocument,
-	hasDocId,
-}: {
-	onPreviewSelected: (document: DocumentRow) => void;
-	onPrefetchDocument?: (documentId: string) => void;
-	onDelete: (document: DocumentRecord) => void;
-	hasDocId: (docId: string) => boolean;
-}) {
+function PreviewCell({ row }: { row: Row<DocumentRow> }) {
+	const { handlePreviewSelected, prefetchDocument } = useDocumentsContext();
+
+	return (
+		<button
+			type="button"
+			onMouseEnter={() => prefetchDocument(row.original.documentId)}
+			onClick={() => {
+				handlePreviewSelected(row.original);
+			}}
+			className="block size-12 overflow-hidden rounded-md border border-slate-200 transition-shadow hover:ring-2 hover:ring-amber-500 focus:ring-2 focus:ring-amber-500 focus:outline-none"
+		>
+			<img
+				src={row.original.presignedUrl}
+				alt={row.original.fileName}
+				className="size-full object-cover"
+			/>
+		</button>
+	);
+}
+
+function ActionsCell({ row }: { row: Row<DocumentRow> }) {
+	const { handleDelete, pendingIds } = useDocumentsContext();
+	const isLoading = pendingIds.has(row.original.documentId);
+
+	return (
+		<div className="flex justify-center items-center w-full">
+			<Button
+				type="button"
+				variant="destructive"
+				size="sm"
+				onClick={() => handleDelete(row.original)}
+				disabled={isLoading}
+				title="delete"
+				aria-label="delete"
+			>
+				{isLoading ? <Loader2 className="animate-spin" /> : <Trash2 />}
+			</Button>
+		</div>
+	);
+}
+
+export function getColumns() {
 	return [
 		columnHelper.display({
 			id: "select",
@@ -83,13 +116,9 @@ export function getColumns({
 			enableSorting: false,
 			cell: ({ row }) => {
 				const doc = row.original;
-
-				// Try new inferenceHistory first, then fall back to legacy
 				const payment = doc.paymentResult;
 
-				if (
-					!payment
-				) {
+				if (!payment) {
 					return <span className="text-muted-foreground">—</span>;
 				}
 
@@ -129,47 +158,14 @@ export function getColumns({
 			id: "preview",
 			header: "Preview",
 			enableSorting: false,
-			cell: ({ row }) => (
-				<button
-					type="button"
-					onMouseEnter={() => onPrefetchDocument?.(row.original.documentId)}
-					onClick={() => {
-						onPreviewSelected(row.original);
-					}}
-					className="block size-12 overflow-hidden rounded-md border border-slate-200 transition-shadow hover:ring-2 hover:ring-amber-500 focus:ring-2 focus:ring-amber-500 focus:outline-none"
-				>
-					<img
-						src={row.original.presignedUrl}
-						alt={row.original.fileName}
-						className="size-full object-cover"
-					/>
-				</button>
-			),
+			cell: ({ row }) => <PreviewCell row={row} />,
 		}),
 
 		columnHelper.display({
 			id: "actions",
 			header: "Actions",
 			enableSorting: false,
-			cell: ({ row }) => (
-				<div className="flex justify-center items-center w-full">
-					<Button
-						type="button"
-						variant="destructive"
-						size="sm"
-						onClick={() => onDelete(row.original)}
-						disabled={hasDocId(row.original.documentId)}
-						title="delete"
-						aria-label="delete"
-					>
-						{hasDocId(row.original.documentId) ? (
-							<Loader2 className="animate-spin" />
-						) : (
-							<Trash2 />
-						)}
-					</Button>
-				</div>
-			),
+			cell: ({ row }) => <ActionsCell row={row} />,
 		}),
 	];
 }
