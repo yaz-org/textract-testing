@@ -1,0 +1,15 @@
+{
+  "name": "@textract-testing/ip-scraper",
+  "type": "module",
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.1075.0",
+    "@sparticuz/chromium": "^149.0.0",
+    "puppeteer-core": "^24.10.2",
+    "puppeteer-extra": "^3.3.6",
+    "puppeteer-extra-plugin-stealth": "^2.11.2",
+    "node-telegram-bot-api": "^0.66"
+  },
+  "devDependencies": {
+    "@types/node": "^22"
+  }
+}

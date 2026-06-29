@@ -16,6 +16,9 @@ class Resource:
     class DocumentQueue:
         type: str
         url: str
+    class DocumentQueueApiKey:
+        type: str
+        value: str
     class Documents:
         name: str
         type: str
@@ -32,7 +35,29 @@ class Resource:
         name: str
         type: str
         url: str
+    class ProtonVpnConfig:
+        type: str
+        value: str
+    class ProtonVpnPassword:
+        type: str
+        value: str
+    class ProtonVpnUsername:
+        type: str
+        value: str
+    class SubmitDocumentFn:
+        name: str
+        type: str
+        url: str
+    class TelegramBotToken:
+        type: str
+        value: str
+    class TelegramChatId:
+        type: str
+        value: str
     class Web:
         type: str
         url: str
+    class WebPageCredentials:
+        type: str
+        value: str
 

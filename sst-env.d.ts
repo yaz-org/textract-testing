@@ -18,6 +18,10 @@ declare module "sst" {
       "type": "sst.aws.Queue"
       "url": string
     }
+    "DocumentQueueApiKey": {
+      "type": "sst.sst.Secret"
+      "value": string
+    }
     "Documents": {
       "name": string
       "type": "sst.aws.Bucket"
@@ -39,9 +43,38 @@ declare module "sst" {
       "type": "sst.aws.Function"
       "url": string
     }
+    "ProtonVpnConfig": {
+      "type": "sst.sst.Secret"
+      "value": string
+    }
+    "ProtonVpnPassword": {
+      "type": "sst.sst.Secret"
+      "value": string
+    }
+    "ProtonVpnUsername": {
+      "type": "sst.sst.Secret"
+      "value": string
+    }
+    "SubmitDocumentFn": {
+      "name": string
+      "type": "sst.aws.Function"
+      "url": string
+    }
+    "TelegramBotToken": {
+      "type": "sst.sst.Secret"
+      "value": string
+    }
+    "TelegramChatId": {
+      "type": "sst.sst.Secret"
+      "value": string
+    }
     "Web": {
       "type": "sst.aws.TanstackStart"
       "url": string
+    }
+    "WebPageCredentials": {
+      "type": "sst.sst.Secret"
+      "value": string
     }
   }
 }

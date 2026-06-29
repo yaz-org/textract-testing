@@ -18,6 +18,8 @@ export default $config({
       DoctrFunctionName: infra.doctrFunction.name,
       DocumentQueueUrl: infra.documentQueue.url,
       WebUrl: infra.web.url,
+      IpScraperFunctionName: infra.ipScraperFunctionName,
+      IpScraperUrl: infra.ipScraperUrl,
     };
   },
 });
