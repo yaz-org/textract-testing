@@ -44,7 +44,20 @@ class Resource:
     class ProtonVpnUsername:
         type: str
         value: str
+    class StatementsScraperApiKey:
+        type: str
+        value: str
+    class StatementsScraperDLQ:
+        type: str
+        url: str
+    class StatementsScraperQueue:
+        type: str
+        url: str
     class SubmitDocumentFn:
+        name: str
+        type: str
+        url: str
+    class SubmitScraperFn:
         name: str
         type: str
         url: str

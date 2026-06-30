@@ -19,7 +19,8 @@ export default $config({
       DocumentQueueUrl: infra.documentQueue.url,
       WebUrl: infra.web.url,
       IpScraperFunctionName: infra.ipScraperFunctionName,
-      IpScraperUrl: infra.ipScraperUrl,
+      StatementsScraperQueueUrl: infra.statementsScraperQueueUrl,
+      SubmitScraperUrl: infra.submitScraperUrl,
     };
   },
 });

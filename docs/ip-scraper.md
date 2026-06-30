@@ -1,61 +1,71 @@
 # ip-scraper: VPN-Proxy Lambda for Banking Login Automation
 
-A Lambda function (custom container image) that automates login to **BanescOnline** (a Venezuelan
-banking website) using Puppeteer/Chromium through a Proton VPN tunnel. It handles multi-factor
-authentication flows including security questions and password entry within an iframe, with
-session persistence and Telegram debug screenshots.
+A two-part system that scrapes account statements from **BanescOnline** (a Venezuelan
+banking website). A submit endpoint enqueues jobs to an SQS FIFO queue (keyed by profile),
+and a Docker Lambda processes them sequentially per profile using Puppeteer/Chromium
+through a Proton VPN tunnel. Results are POSTed to a caller-provided callback URL.
 
 ---
 
 ## Architecture
 
 ```
-                          ┌───────────────────────────────────────────────┐
-                          │            Lambda Container                   │
-                          │  ┌────────────────────────────────────┐      │
- Invoke (URL) ───────────┼─▶│           Handler (.mjs)            │      │
-                          │  │                                    │      │
-                          │  │  1. Fetch .ovpn from S3            │──────┼──▶ S3 (config)
-                          │  │  2. Spawn openvpn2socks            │      │
-                          │  │  3. Wait for SOCKS5 :1080           │      │
-                          │  │  4. Launch Chromium (puppeteer-extra│      │
-                          │  │     + stealth plugin)               │      │
-                          │  │  5. Load saved session (cookies)    │──────┼──▶ S3 (session)
-                          │  │  6. Navigate to BanescOnline        │      │
-                          │  │  7. Type username → Enter            │      │
-                          │  │  8. Answer security questions        │      │
-                          │  │  9. Type password → Enter            │──────┼──▶ BanescOnline
-                           │  │ 10. Detect dashboard (iframe gone)  │      │
-                           │  │ 11. Close modal (if present)        │      │
-                           │  │ 12. Fetch account statements        │      │
-                           │  │ 13. Logout → salir.aspx             │      │
-                           │  │ 14. Browser cleanup (finally)       │      │
-                          │  └──────────┬─────────────────────────┘      │
-                          │             │                                │
-                          │    ┌────────▼──────────┐                    │
-                          │    │  openvpn2socks     │                    │
-                          │    │  SOCKS5 :1080      │◀───────────────────┼── Proton VPN
-                          │    └───────────────────┘                    │
-                          └───────────────────────────────────────────────┘
+Client ──POST──▶ SubmitScraperFn (Function URL, API-key)
+                    │
+                    ▼
+            StatementsScraperQueue (FIFO)
+              MessageGroupId = profileName
+                    │
+                    ▼
+         ┌───────────────────────────────────────────────┐
+         │            Lambda Container (Docker)           │
+         │  ┌────────────────────────────────────┐      │
+         │  │           Handler (.mjs)           │      │
+         │  │                                    │      │
+         │  │  1. Fetch .ovpn from S3            │──────┼──▶ S3 (config)
+         │  │  2. Spawn openvpn2socks            │      │
+         │  │  3. Wait for SOCKS5 :1080           │      │
+         │  │  4. Launch Chromium (puppeteer-extra│      │
+         │  │     + stealth plugin)               │      │
+         │  │  5. Load saved session (cookies)    │──────┼──▶ S3 (session)
+         │  │  6. Navigate to BanescOnline        │      │
+         │  │  7. Type username → Enter            │      │
+         │  │  8. Answer security questions        │      │
+         │  │  9. Type password → Enter            │──────┼──▶ BanescOnline
+         │  │ 10. Detect dashboard (iframe gone)   │      │
+         │  │ 11. Close modal (if present)         │      │
+         │  │ 12. Fetch account statements         │      │
+         │  │ 13. POST results to callbackUrl      │──────┼──▶ Callback URL
+         │  │ 14. Logout → salir.aspx             │      │
+         │  │ 15. Browser cleanup (finally)        │      │
+         │  └──────────┬─────────────────────────┘      │
+         │             │                                │
+         │    ┌────────▼──────────┐                    │
+         │    │  openvpn2socks     │                    │
+         │    │  SOCKS5 :1080      │◀───────────────────┼── Proton VPN
+         │    └───────────────────┘                    │
+         └───────────────────────────────────────────────┘
 ```
 
 **Flow**:
-1. Lambda receives an event (direct invoke, no auth needed)
-2. Handler fetches the OpenVPN profile from S3 (decoded from a base64 SST secret)
-3. Writes the `.ovpn` file to `/tmp/proton.ovpn`
-4. Spawns `openvpn2socks` which connects to Proton VPN and listens on `127.0.0.1:1080` (SOCKS5)
-5. Launches Puppeteer with `puppeteer-extra` + stealth plugin; `--proxy-server=socks5://127.0.0.1:1080`
-6. Loads previous session cookies from S3 (if any)
-7. Navigates to BanescOnline login page
-8. **Login flow**:
-   - If session already valid → auto-redirects to CAU area
-   - Finds `#txtUsuario` in the login iframe → types username character-by-character → Enter
-   - If security questions page (`LoginDNA.aspx`): detects questions via `#lblPrimeraP` / `#lblSegundaP`,
-     looks up answers in credentials, types into `#txtPrimeraR` / `#txtSegundaR`, submits
-   - Finds `#txtClave` → types password character-by-character → Enter
-   - Waits for redirect: iframe disappears → /Mantis/WebSite/Default.aspx (dashboard)
-9. If dashboard reached: close modal (#closeButton) → fetch account statements (click account link → select Por Rango → set date range in VET → click Consultar) → extract JSON + screenshot → logout (#ctl00_btnSalir → salir.aspx)
-10. Browser cleanup on finally block; VPN cleanup on outer finally block
+1. Client POSTs `{ profileName, callbackUrl }` + `x-api-key` to `SubmitScraperFn` URL
+2. Submit function validates the API key, sends message to FIFO queue (`MessageGroupId: profileName`)
+3. Scraper Lambda receives the SQS event, extracts `{ profileName, callbackUrl }`
+4. Fetches OpenVPN profile from S3 (decoded from a base64 SST secret)
+5. Writes the `.ovpn` file to `/tmp/proton.ovpn`
+6. Spawns `openvpn2socks` which connects to Proton VPN and listens on `127.0.0.1:1080` (SOCKS5)
+7. Launches Puppeteer with `puppeteer-extra` + stealth plugin; `--proxy-server=socks5://127.0.0.1:1080`
+8. Loads previous session cookies from S3 (if any)
+9. Navigates to BanescOnline login page
+10. **Login flow**:
+    - If session already valid → auto-redirects to CAU area
+    - Finds `#txtUsuario` in the login iframe → types username character-by-character → Enter
+    - If security questions page (`LoginDNA.aspx`): detects questions via `#lblPrimeraP` / `#lblSegundaP`,
+      looks up answers in credentials, types into `#txtPrimeraR` / `#txtSegundaR`, submits
+    - Finds `#txtClave` → types password character-by-character → Enter
+    - Waits for redirect: iframe disappears → /Mantis/WebSite/Default.aspx (dashboard)
+11. If dashboard reached: close modal → fetch statements → POST `{ success, transactions }` to callbackUrl → logout
+12. Browser cleanup on finally block; VPN cleanup on outer finally block
 
 ---
 
@@ -69,7 +79,7 @@ session persistence and Telegram debug screenshots.
 | `puppeteer-core` | Headless browser control |
 | `n0madic/go-openvpn` (openvpn2socks) | Pure-Go OpenVPN client → SOCKS5 |
 | `@aws-sdk/client-s3` | Fetch OpenVPN config and session state from S3 |
-| `node-telegram-bot-api` | Send success (🟢) and error (🔴) screenshots via Telegram |
+| `node-telegram-bot-api` | Send error (🔴) screenshots via Telegram for debugging |
 
 ---
 
@@ -137,9 +147,6 @@ Used on these error states (🔴):
 - Unanswered security questions (early return)
 - Post-password unexpected URL (error/DNA/security page instead of dashboard)
 - Post-password URL evaluation failure
-
-Used on success (🟢):
-- Account statement — after fetching transactions
 
 ### Session Persistence
 
@@ -209,8 +216,7 @@ async function closeModal(page) {
 
 After login, navigates to the account statement page, selects "Por Rango" (date range),
 sets Desde to yesterday and Hasta to two days later in Venezuelan time (UTC-4),
-clicks Consultar, verifies the transactions table by its headers, extracts rows to JSON,
-sends both a screenshot and the JSON data via Telegram.
+clicks Consultar, verifies the transactions table by its headers, and extracts rows to JSON.
 
 **Steps:**
 1. Look for `table.GridViewHm a` — if found, click first account link (triggers ASP.NET postback)
@@ -222,7 +228,8 @@ sends both a screenshot and the JSON data via Telegram.
 7. Verify `table.DefGV` has headers matching `["Fecha", "Descripción", "Referencia", "Monto", "D/C", "Saldo"]`
 8. If table missing, check for "no movements" message → treat as success with empty array
 9. Extract each row as `{ date, description, reference, amount, type, balance }`
-10. Send 🟢 screenshot + JSON text message to Telegram
+
+Results are returned to the caller via callbackUrl POST (not Telegram).
 
 ### Logout
 
@@ -294,12 +301,16 @@ async function findInputByPriority(frame, selectors, label) {
 
 ```javascript
 export const handler = async (event) => {
-  const profileName = event?.profile;
-
-  if (!profileName) {
-    return { error: "Missing 'profile' in event" };
+  // SQS event unwrapping
+  if (event.Records?.[0]?.eventSource === "aws:sqs") {
+    event = JSON.parse(event.Records[0].body);
   }
-  
+
+  const profileName = event?.profileName;
+  if (!profileName) {
+    return { error: "Missing 'profileName' in event" };
+  }
+
   // Decode WebPageCredentials (base64 JSON profile map)
   const encoded = process.env.WEB_PAGE_CREDENTIALS;
   const allCreds = JSON.parse(Buffer.from(encoded, "base64").toString());
@@ -315,59 +326,31 @@ export const handler = async (event) => {
 
     // 2. Launch Chromium with stealth
     const browser = await puppeteer.launch({
-      args: [ ...chromium.args, '--no-sandbox', '--disable-setuid-sandbox',
-              '--lang=es', `--proxy-server=socks5://127.0.0.1:${VPN_SOCKS_PORT}` ],
+      args: [ ...chromium.args, '--no-sandbox', ... ],
       executablePath: await chromium.executablePath(),
       headless: true,
     });
     try {
-      const page = await browser.newPage();
-      await page.setViewport({ width: 1920, height: 1080 });
-      await page.setExtraHTTPHeaders({ "Accept-Language": "es" });
+      // ... login flow ...
 
-      // 3. Load session
-      const session = await loadSession();
-      if (session?.cookies?.length) {
-        await page.setCookie(...session.cookies);
+      // On success:
+      const statementsResult = await fetchStatements(page);
+
+      // POST results to callbackUrl
+      if (statementsResult?.success && event.callbackUrl) {
+        await fetch(event.callbackUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            success: true,
+            profileName,
+            transactions: statementsResult.transactions,
+            transactionsCount: statementsResult.transactions.length,
+          }),
+        });
       }
 
-      // 4. Navigate to BanescOnline
-      await page.goto(targetUrl, { waitUntil: "networkidle0", timeout: 30000 });
-
-      // 5. Enter iframe and perform login flow
-      const iframeEl = await page.$("#ctl00_cp_frmAplicacion");
-      const iframe = await iframeEl.contentFrame();
-
-      // --- Username ---
-      const usernameSelector = await findInputByPriority(iframe, [
-        "#txtUsuario", 'input[name="txtUsuario"]',
-      ], "username");
-      await typeSlowly(iframe, usernameSelector, creds.username);
-      await page.keyboard.press("Enter");
-
-      // --- Wait for navigation ---
-      // iframe URL changes from inicio.aspx → LoginDNA.aspx (security questions)
-      // or → ContrasenaDNA.aspx (password page)
-
-      // --- Security Questions ---
-      if (currentUrl?.includes("LoginDNA")) {
-        const hasQ1 = await iframe.$("#lblPrimeraP") !== null;
-        const hasQ2 = await iframe.$("#lblSegundaP") !== null;
-        // Look up answers from creds.security_questions map
-        // Type answers into #txtPrimeraR / #txtSegundaR
-        // Submit via #bAceptar
-      }
-
-      // --- Password ---
-      const passwordSelector = await findInputByPriority(iframe, [
-        "#txtClave", 'input[type="password"]', ...
-      ], "password");
-      await typeSlowly(iframe, passwordSelector, creds.password);
-      await page.keyboard.press("Enter");
-
-      // --- Dashboard Detection ---
-      // waitForFunction: if iframe is gone → top-level redirect to dashboard
-      // If still on DNA/Contraseña page → timeout → screenshot
+      await performLogout(page);
     } finally { ... }
   } finally { cleanup(); }
 };
@@ -424,8 +407,7 @@ waitForFunction dashboard detection (25s)
             │     ├── click #ctl00_cp_btnMostrar (Consultar)
             │     ├── verify table.DefGV headers match expected
             │     ├── extract rows → JSON
-            │     ├── 🟢 sendScreenshot("account-statement")
-            │     └── send JSON to Telegram
+            │     └── POST { success, transactions } → callbackUrl
             ├── performLogout() → #ctl00_btnSalir → waitForFunction("salir.aspx")
             └── return { step: "logged-out" }
                  (session NOT saved — server-side session left intact)
@@ -588,8 +570,9 @@ Built with `@pulumi/docker-build`. Tagged `ip-scraper-<stage>:latest`.
 Platform: `linux/amd64`.
 
 ### IAM role
-`AWSLambdaBasicExecutionRole` managed policy + custom inline policy:
-- `s3:GetObject`, `s3:PutObject` on the config bucket
+`AWSLambdaBasicExecutionRole` managed policy + two inline policies:
+- **S3 access**: `s3:GetObject`, `s3:PutObject` on the config bucket
+- **SQS access**: `sqs:ReceiveMessage`, `sqs:DeleteMessage`, `sqs:GetQueueAttributes` on the queue
 
 ### Lambda function
 Container image, 2048 MB memory, 60s timeout, 1024 MB ephemeral storage.
@@ -603,27 +586,34 @@ Container image, 2048 MB memory, 60s timeout, 1024 MB ephemeral storage.
 | `OPENVPN_USERNAME` | `ProtonVpnUsername` secret | VPN auth |
 | `OPENVPN_PASSWORD` | `ProtonVpnPassword` secret | VPN auth |
 | `WEB_PAGE_CREDENTIALS` | `WebPageCredentials` secret | Base64 JSON profile map |
-| `TELEGRAM_BOT_TOKEN` | `TelegramBotToken` secret | Bot token for error screenshots |
-| `TELEGRAM_CHAT_ID` | `TelegramChatId` secret | Chat to receive screenshots |
+| `TELEGRAM_BOT_TOKEN` | `TelegramBotToken` secret | Bot token for error screenshots only |
+| `TELEGRAM_CHAT_ID` | `TelegramChatId` secret | Chat to receive error screenshots |
 | `SESSION_STATE_KEY` | hardcoded | `session-state.json` |
 
-### Function URL
-Public, no auth. Used for testing via `curl`.
+### FIFO Queue + Event Source Mapping
+`StatementsScraperQueue` (FIFO, content-based dedup, 3min visibility timeout) with a DLQ.
+`EventSourceMapping` wires the queue to the scraper Lambda. `MessageGroupId: profileName`
+ensures sequential execution per profile.
+
+### Submit function
+`sst.aws.Function` with Function URL, API key validation via `x-api-header`. Enqueues
+`{ profileName, callbackUrl }` to the FIFO queue.
 
 ---
 
 ## Secrets Management
 
-Six SST secrets:
+Seven SST secrets:
 
 | Secret | Content | How it's used                                                                           |
 |---|---|-----------------------------------------------------------------------------------------|
 | `ProtonVpnConfig` | Base64 `.ovpn` profile | Decoded → S3 → Lambda fetches at cold start                                             |
 | `ProtonVpnUsername` | OpenVPN auth username | `OPENVPN_USERNAME` env var → `OVPN_USER` to openvpn2socks                               |
 | `ProtonVpnPassword` | OpenVPN auth password | `OPENVPN_PASSWORD` env var → `OVPN_PASS` to openvpn2socks                               |
-| `WebPageCredentials` | Base64 JSON profile map | Decoded → parsed → lookup by `event.profile` (Return with error if no profile is found) |
+| `WebPageCredentials` | Base64 JSON profile map | Decoded → parsed → lookup by `event.profileName` (returns `{ step: "profile-not-found" }` if missing) |
 | `TelegramBotToken` | Telegram bot API token | Initializes `node-telegram-bot-api` for screenshots                                     |
-| `TelegramChatId` | Numeric Telegram chat ID | Destination for screenshot messages                                                     |
+| `TelegramChatId` | Numeric Telegram chat ID | Destination for error screenshot messages                                                   |
+| `StatementsScraperApiKey` | API key string | Validates submit-scraper requests via `x-api-key` header                                  |
 
 **Credentials JSON structure:**
 
@@ -659,33 +649,67 @@ bunx sst deploy --stage production
 Outputs:
 ```
 IpScraperFunctionName: IpScraper-<suffix>
-IpScraperUrl: https://<id>.lambda-url.us-east-1.on.aws/
+StatementsScraperQueueUrl: https://sqs.us-east-1.amazonaws.com/<account>/<queue>.fifo
+SubmitScraperUrl: https://<id>.lambda-url.us-east-1.on.aws/
 ```
 
 ---
 
 ## Usage
 
-```bash
-# Trigger login flow
-aws lambda invoke --function-name IpScraper-<suffix> --payload '{}' out.json
+### Submit a scraping job
 
-# Use a specific profile
-aws lambda invoke --function-name IpScraper-<suffix> \
-  --payload '{"profile":"{profile}"}' out.json
+```bash
+curl -X POST "$(bunx sst get --stage production SubmitScraperUrl)" \
+  -H "Content-Type: application/json" \
+  -H "x-api-key: $(bunx sst secret get --stage production StatementsScraperApiKey)" \
+  -d '{"profileName":"Betsa","callbackUrl":"https://your-callback.example.com/hook"}'
 ```
 
-**Response fields:**
+The submit endpoint returns `{ "success": true }` immediately. The scraper processes
+the job asynchronously and POSTs the result to `callbackUrl`.
+
+### Callback payload (success)
+
+```json
+{
+  "success": true,
+  "profileName": "Betsa",
+  "transactions": [
+    { "date": "28/06/2026", "description": "...", "reference": "...", "amount": "1.234,56", "type": "C", "balance": "9.876,54" }
+  ],
+  "transactionsCount": 1
+}
+```
+
+### Callback payload (no transactions)
+
+```json
+{
+  "success": true,
+  "profileName": "Betsa",
+  "transactions": [],
+  "transactionsCount": 0
+}
+```
+
+### Direct Lambda invocation (for debugging)
+
+```bash
+aws lambda invoke --function-name IpScraper-<suffix> \
+  --payload '{"profileName":"Betsa","callbackUrl":"https://..."}' out.json
+```
+
+**Response fields (Lambda return — not callback):**
 
 | Field | Description |
 |---|---|
-| `step` | `dashboard-loaded`, `logged-out`, `logout-attempted`, `security-questions-incomplete`, or error |
+| `step` | `dashboard-loaded`, `logged-out`, `logout-attempted`, `security-questions-incomplete`, `profile-not-found`, or error |
+| `profileName` | Profile used for the run |
 | `dashboardUrl` | Final URL after password (e.g. `/Mantis/WebSite/Default.aspx`) |
 | `passwordPostUrl` | Iframe URL after password submit |
 | `questionsAnswered` | Array of security questions answered |
 | `unansweredQuestions` | Array of questions not in credentials |
-| `usernameSelector` | CSS selector used for username field |
-| `passwordSelector` | CSS selector used for password field |
 | `modalClosed` | Whether a modal was detected and closed |
 | `statementsFetched` | Whether account statements were successfully fetched |
 | `statementsReason` | Reason if fetching failed (`"no-account-or-period-page"`, `"account-navigation-timeout"`, `"consult-navigation-timeout"`, `"no-transaction-table"`) |
@@ -693,13 +717,11 @@ aws lambda invoke --function-name IpScraper-<suffix> \
 | `logoutMethod` | Selector used for logout (e.g. `#ctl00_btnSalir`) |
 | `logoutUrl` | Final URL after logout (e.g. `salir.aspx`) |
 
-**Telegram messages:**
+**Telegram messages (error/debug only):**
 
-| Emoji/Type | Trigger |
+| Emoji | Trigger |
 |---|---|
-| 🟢 screenshot | Account statement page |
-| Text message | JSON transaction data |
-| 🔴 screenshot | Iframe navigation timeout |
+| 🔴 | Iframe navigation timeout |
 | 🔴 | Unexpected DNA layout |
 | 🔴 | Security questions error |
 | 🔴 | Unanswered security questions (early return) |
@@ -741,7 +763,9 @@ Lambda timeout: 60s (allows for cold start + VPN failover + 25s dashboard detect
 | ASP.NET postback navigation timeout | 20s timeout on account link and Consultar `waitForNavigation` |
 | No account table on dashboard | `fetchStatements()` checks for `#ctl00_cp_ddlPeriodo` fallback; returns `{ success: false }` |
 | Transactions table headers mismatch | `fetchStatements()` returns `{ success: false, reason: "no-transaction-table" }` |
-| Telegram message too long | JSON payload truncated to ~3900 chars with truncation notice |
+| FIFO queue visibility timeout | 3min covers total ~24s warm invoke; DLQ catches messages after 3 retries |
+| Concurrent invocations for same profile | FIFO + MessageGroupId guarantees serial processing per profile |
+| Callback URL unreachable | Error logged but handler continues; caller can retry via new submit |
 | Logout link not found | `performLogout()` returns `{ success: false }` without failing the handler |
 | Logout navigation timeout | 15s timeout on `waitForFunction("salir.aspx")`; returns partial result |
 | Session cookies expire server-side | Fresh login generates new cookies; old session gracefully handled |

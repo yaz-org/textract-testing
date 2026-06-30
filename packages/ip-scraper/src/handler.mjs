@@ -330,17 +330,7 @@ async function fetchStatements(page) {
   if (!tableFound) {
     if (noTransactions) {
       console.log("[statements] No transactions in selected period");
-      const transactions = [];
-      await sendScreenshot(page, "account-statement-no-transactions", {
-        url: page.url(),
-        type: "success",
-      }).catch(() => {});
-      const message = "📊 *Account Statement*\n0 transactions — no movements in selected period";
-      if (bot && TELEGRAM_CHAT_ID) {
-        await bot.sendMessage(TELEGRAM_CHAT_ID, message, { parse_mode: "Markdown" })
-          .catch(() => {});
-      }
-      return { success: true, reason: null, transactions };
+      return { success: true, reason: null, transactions: [] };
     }
     console.log("[statements] Transactions table not found and no matching message");
     return { success: false, reason: "no-transaction-table" };
@@ -363,28 +353,6 @@ async function fetchStatements(page) {
     });
   });
   console.log(`[statements] Extracted ${transactions.length} transactions`);
-
-  await sendScreenshot(page, "account-statement", {
-    url: page.url(),
-    type: "success",
-  }).catch(() => {});
-
-  const jsonPayload = JSON.stringify(transactions, null, 2);
-  const message = `📊 *Account Statement*\n${transactions.length} transactions\n\n\`\`\`json\n${jsonPayload}\n\`\`\``;
-  const truncated = message.length > 4000
-    ? message.substring(0, 3900) + "\n```\n… (truncated)"
-    : message;
-
-  if (bot && TELEGRAM_CHAT_ID) {
-    try {
-      await bot.sendMessage(TELEGRAM_CHAT_ID, truncated, {
-        parse_mode: "Markdown",
-      });
-      console.log("[telegram] Sent transaction data");
-    } catch (err) {
-      console.error(`[telegram] Failed to send transaction data: ${err.message}`);
-    }
-  }
 
   return { success: true, reason: null, transactions };
 }
@@ -420,6 +388,10 @@ async function startVpnProxy(config) {
 }
 
 export const handler = async (event) => {
+  if (event.Records?.[0]?.eventSource === "aws:sqs") {
+    event = JSON.parse(event.Records[0].body);
+  }
+
   const vpnUser = process.env.OPENVPN_USERNAME;
   const vpnPass = process.env.OPENVPN_PASSWORD;
 
@@ -427,7 +399,7 @@ export const handler = async (event) => {
     return { error: "Missing VPN environment variables" };
   }
 
-  const profileName = event?.profile;
+  const profileName = event?.profileName;
 
   if (!profileName) {
     return { error: "Missing 'profile' in event" };
@@ -441,7 +413,7 @@ export const handler = async (event) => {
     creds = allCreds[profileName];
     if (!creds) {
       console.log(`[handler] Profile "${profileName}" not found in credentials`);
-      return { step: "profile-not-found", profile: profileName };
+      return { step: "profile-not-found", profileName };
     }
   } catch (err) {
     return { error: `Failed to load credentials: ${err.message}` };
@@ -657,7 +629,7 @@ export const handler = async (event) => {
         await saveSession(page).catch(() => {});
         return {
           step: "security-questions-incomplete",
-          profile: profileName,
+          profileName,
           username: creds.username.substring(0, 2) + "***",
           questionsAnswered,
           unansweredQuestions,
@@ -755,6 +727,25 @@ export const handler = async (event) => {
             return { success: false, reason: "exception" };
           });
 
+          if (statementsResult?.success && event.callbackUrl) {
+            try {
+              const callbackBody = JSON.stringify({
+                success: true,
+                profileName,
+                transactions: statementsResult.transactions,
+                transactionsCount: statementsResult.transactions.length,
+              });
+              const resp = await fetch(event.callbackUrl, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: callbackBody,
+              });
+              console.log(`[callback] Posted to ${event.callbackUrl} (${resp.status})`);
+            } catch (err) {
+              console.error(`[callback] Failed: ${err.message}`);
+            }
+          }
+
           const logoutResult = await performLogout(page).catch((err) => {
             console.log(`[logout] Error: ${err.message}`);
             return { success: false, method: null, finalUrl: page.url() };
@@ -763,7 +754,7 @@ export const handler = async (event) => {
           // Return early — session is server-side, don't clear or overwrite
           return {
             step: logoutResult?.success ? "logged-out" : "logout-attempted",
-            profile: profileName,
+            profileName,
             username: creds.username.substring(0, 2) + "***",
             usernameSelector,
             passwordSelector,
@@ -796,7 +787,7 @@ export const handler = async (event) => {
 
       return {
         step: "dashboard-loaded",
-        profile: profileName,
+        profileName,
         username: creds.username.substring(0, 2) + "***",
         usernameSelector,
         passwordSelector,

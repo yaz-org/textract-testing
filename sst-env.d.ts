@@ -55,7 +55,24 @@ declare module "sst" {
       "type": "sst.sst.Secret"
       "value": string
     }
+    "StatementsScraperApiKey": {
+      "type": "sst.sst.Secret"
+      "value": string
+    }
+    "StatementsScraperDLQ": {
+      "type": "sst.aws.Queue"
+      "url": string
+    }
+    "StatementsScraperQueue": {
+      "type": "sst.aws.Queue"
+      "url": string
+    }
     "SubmitDocumentFn": {
+      "name": string
+      "type": "sst.aws.Function"
+      "url": string
+    }
+    "SubmitScraperFn": {
       "name": string
       "type": "sst.aws.Function"
       "url": string

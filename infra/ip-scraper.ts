@@ -115,15 +115,64 @@ const fn = new aws.lambda.Function("IpScraper", {
   },
 });
 
-const fnUrl = new aws.lambda.FunctionUrl("IpScraperUrl", {
-  functionName: fn.name,
-  authorizationType: "NONE",
-  cors: {
-    allowOrigins: ["*"],
-    allowMethods: ["GET", "POST"],
-    allowHeaders: ["*"],
+// --- FIFO Queue for sequential profile execution ---
+
+const statementsScraperApiKey = new sst.Secret("StatementsScraperApiKey");
+
+const statementsScraperDlq = new sst.aws.Queue("StatementsScraperDLQ", {
+  fifo: true,
+});
+
+const statementsScraperQueue = new sst.aws.Queue("StatementsScraperQueue", {
+  fifo: {
+    contentBasedDeduplication: true,
+  },
+  visibilityTimeout: "3 minutes",
+  dlq: {
+    queue: statementsScraperDlq.arn,
+    retry: 3,
   },
 });
 
+new aws.iam.RolePolicy("IpScraperSQSAccess", {
+  role: role.id,
+  policy: {
+    Version: "2012-10-17",
+    Statement: [
+      {
+        Effect: "Allow",
+        Action: [
+          "sqs:ReceiveMessage",
+          "sqs:DeleteMessage",
+          "sqs:GetQueueAttributes",
+        ],
+        Resource: [statementsScraperQueue.arn],
+      },
+    ],
+  },
+});
+
+new aws.lambda.EventSourceMapping("IpScraperSQS", {
+  eventSourceArn: statementsScraperQueue.arn,
+  functionName: fn.name,
+});
+
+// --- Submit endpoint ---
+
+const submitScraperFn = new sst.aws.Function("SubmitScraperFn", {
+  handler: "packages/functions/src/submit-scraper.handler",
+  timeout: "10 seconds",
+  memory: "128 MB",
+  url: true,
+  link: [statementsScraperQueue, statementsScraperApiKey],
+  permissions: [
+    {
+      actions: ["sqs:SendMessage"],
+      resources: [statementsScraperQueue.arn],
+    },
+  ],
+});
+
 export const ipScraperFunctionName = fn.name;
-export const ipScraperUrl = fnUrl.functionUrl;
+export const statementsScraperQueueUrl = statementsScraperQueue.url;
+export const submitScraperUrl = submitScraperFn.url;
