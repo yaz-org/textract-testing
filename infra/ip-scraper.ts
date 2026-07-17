@@ -2,6 +2,7 @@ import { Image } from "@pulumi/docker-build";
 import * as aws from "@pulumi/aws";
 import * as pulumi from "@pulumi/pulumi";
 import * as path from "path";
+import { statementCallbackHmacSecret } from "./callback-signing";
 
 const vpnConfig = new sst.Secret("ProtonVpnConfig");
 const vpnUsername = new sst.Secret("ProtonVpnUsername");
@@ -110,6 +111,7 @@ const fn = new aws.lambda.Function("IpScraper", {
       WEB_PAGE_CREDENTIALS: webPageCredentials.value,
       TELEGRAM_BOT_TOKEN: telegramBotToken.value,
       TELEGRAM_CHAT_ID: telegramChatId.value,
+      CFF_HMAC_SECRET_HEX: statementCallbackHmacSecret.value,
       SESSION_STATE_KEY: "session-state.json",
     },
   },
