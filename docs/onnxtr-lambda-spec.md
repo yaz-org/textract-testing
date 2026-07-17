@@ -37,11 +37,13 @@ The implementation was traced across the package and its immediate boundaries:
 | [`packages/onnxtr-lambda/pyproject.toml`](../packages/onnxtr-lambda/pyproject.toml) | Declared Python compatibility and dependencies |
 | [`infra/onnxtr.ts`](../infra/onnxtr.ts) | Separate, directly invokable OnnxTR function definition |
 | [`infra/queue.ts`](../infra/queue.ts) | FIFO source queue, DLQ, and production subscriber definition |
+| [`infra/submit.ts`](../infra/submit.ts) | Authenticated submission Function URL and queue permissions |
+| [`packages/functions/src/submit-document.ts`](../packages/functions/src/submit-document.ts) | Primary production submission boundary; accepts the externally selected FIFO message group |
 | [`packages/functions/src/process-document.ts`](../packages/functions/src/process-document.ts) | Callback consumer boundary |
 | [`packages/shared/src/payment.ts`](../packages/shared/src/payment.ts) | TypeScript representation of OnnxTR output |
 | [`packages/shared/src/documents.ts`](../packages/shared/src/documents.ts) | Downstream append-to-history persistence behavior |
-| [`packages/web/src/lib/server-fns.ts`](../packages/web/src/lib/server-fns.ts) | Primary queue producer boundary |
-| [`packages/web/src/lib/documents.ts`](../packages/web/src/lib/documents.ts) | One-hour S3 presigned URL generation |
+| [`packages/web/src/lib/server-fns.ts`](../packages/web/src/lib/server-fns.ts) | In-repository web producer path; not the authoritative production submission boundary |
+| [`packages/web/src/lib/documents.ts`](../packages/web/src/lib/documents.ts) | One-hour S3 presigned URL generation used by the in-repository web producer path |
 | [`packages/scripts/src/onnxtr-extract.ts`](../packages/scripts/src/onnxtr-extract.ts) | Stale direct-invocation client |
 | [`README.md`](../README.md) | Existing technology documentation links |
 | [`uv.lock`](../uv.lock) | Workspace dependency resolution; not consumed by the current Docker build |
@@ -128,15 +130,17 @@ Direct `{s3Key}` invocation is therefore stale and unsupported. The target state
 
 ```mermaid
 sequenceDiagram
-    participant Producer as Web producer
-    participant S3 as Amazon S3
+    participant Producer as External service
+    participant Submit as SubmitDocumentFn
+    participant S3 as Document origin
     participant Queue as SQS FIFO queue
     participant OCR as OnnxTR Lambda
     participant Callback as Callback Function URL
     participant DB as Downstream persistence
 
-    Producer->>S3: Create presigned GetObject URL (1 hour)
-    Producer->>Queue: Send {downloadUrl, callbackUrl}
+    Producer->>Submit: POST {downloadUrl, callbackUrl, messageGroupId}
+    Submit->>Submit: Authenticate and validate request shape
+    Submit->>Queue: Send {downloadUrl, callbackUrl} with MessageGroupId
     Queue->>OCR: Invoke with Records[] batch
     OCR->>S3: HTTPS GET through presigned URL
     OCR->>OCR: Write /tmp file and run OnnxTR
@@ -146,16 +150,16 @@ sequenceDiagram
     OCR-->>Queue: Return batchItemFailures
 ```
 
-### 3.1 Producer behavior
+### 3.1 Submission behavior
 
-The primary producer in `server-fns.ts:55-77`:
+The primary production entry point is `submit-document.ts:1-65`, exposed by `infra/submit.ts` as a Lambda Function URL. An external service supplies `downloadUrl`, `callbackUrl`, and `messageGroupId`:
 
-1. Generates a presigned `GetObject` URL with a 3,600-second expiry.
-2. Builds the callback path `/documents/{documentId}`.
-3. Sends the two URLs as the SQS message body.
-4. Uses the FIFO message group `documents` for every document.
+1. The submission Lambda checks the `x-api-key` header against the SST-managed secret.
+2. Zod validates that all three request properties are strings.
+3. The Lambda sends only `downloadUrl` and `callbackUrl` in the SQS message body.
+4. It passes the externally supplied `messageGroupId` to SQS as `MessageGroupId`.
 
-Using one message group preserves global order but limits FIFO concurrency to one active message group. The observed production maximum concurrency was one.
+The FIFO group is therefore transport metadata rather than part of the OnnxTR worker payload. Group selection is intentionally controlled by the external service and must remain outside the OCR Lambda. FIFO ordering is guaranteed within each group, while Lambda concurrency is bounded by the number of active message groups and any configured concurrency limits. AWS documents this relationship in [Configuring scaling behavior for SQS event source mappings](https://docs.aws.amazon.com/lambda/latest/dg/services-sqs-scaling.html). The hard-coded group in the separate in-repository `server-fns.ts` path is not evidence of the primary production traffic pattern and is excluded from capacity conclusions.
 
 ### 3.2 Handler behavior
 
@@ -307,6 +311,8 @@ Current JSON Schema, describing what the handler actually expects:
 Current validation consists only of `json.loads` and direct dictionary lookup. The handler does not currently enforce the schema, string types, URL syntax, schemes, destinations, ports, callback path, or maximum field lengths.
 
 The target retains both required fields and `additionalProperties: true` for compatibility, while adding the validation rules in section 8.
+
+The upstream submission API also requires `messageGroupId`, but that value is assigned to the SQS `MessageGroupId` field and is deliberately absent from this application message. The OCR handler must not derive, override, or otherwise reinterpret it.
 
 ### 5.3 Successful callback
 
@@ -568,7 +574,7 @@ The 299 processed-document events exceeding 248 invocation reports is consistent
 | H1 | High | Visibility is 240s for a 180s function | Premature duplicate processing during retries/throttles | Visibility at least 1,080s |
 | H2 | High | Batch size 10 with sequential OCR | Batch timeout and broad failure blast radius | Batch size 1 |
 | H3 | High | FIFO loop continues after failure | Ordering violation after partial-response activation | Size 1; otherwise stop after first failure |
-| H4 | High | Presigned URL expires after one hour | Backlog/retry can make the document permanently unavailable | Queue-age alarm and explicit 403 terminal handling |
+| H4 | High | A presigned URL can expire before processing or retry | Backlog/retry can make the document permanently unavailable | TTL-aware queue-age alarm and explicit 403 terminal handling |
 | H5 | High | Entire download is buffered without a cap | Memory and `/tmp` exhaustion | Stream with a 20 MiB hard limit |
 | H6 | High | Callback retry repeats OCR; consumer appends | Duplicate history and avoidable compute | Message-ID idempotency key and callback deduplication |
 | H7 | High | Callback receives full traceback | Internal detail disclosure | Sanitized public errors |
@@ -600,7 +606,7 @@ Target: configure `batch.size: 1` and `batch.partialResponses: true`, verify the
 
 `downloadUrl` is passed to `requests.get`, and `callbackUrl` is passed to `requests.post`. Neither is validated. Requests follows redirects by default.
 
-Although the primary producer is trusted application code, the Lambda's security boundary is the SQS message. Other producers, compromised credentials, replay tooling, or malformed operational messages can make the function contact arbitrary public or internal destinations.
+Although the primary submission boundary requires an API key, the OCR Lambda's security boundary is still the SQS message. A compromised submission credential, another authorized producer, replay tooling, or a malformed operational message can make the function contact arbitrary public or internal destinations.
 
 Target: the validation controls in section 8.3. The [OWASP SSRF Prevention Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Server_Side_Request_Forgery_Prevention_Cheat_Sheet.html) recommends strict allowlists where known destinations exist and disabling redirect following to prevent validation bypass.
 
@@ -632,11 +638,11 @@ Target: one record per invocation. Model reuse still occurs across warm invocati
 
 The loop appends a failure and continues to later records. When partial responses are enabled for a FIFO queue, AWS says to stop after the first failure and return all failed and unprocessed records to preserve ordering. Batch size one makes this requirement automatic.
 
-#### H4. Presigned URL lifetime and queue lifetime differ
+#### H4. Presigned URL lifetime and queue lifetime can differ
 
-The producer creates a 3,600-second URL. The queue can retain messages for days, a backlog can delay first processing, and retries occur later. S3 also limits presigned URL validity to the underlying credential lifetime. See [Download and upload objects with presigned URLs](https://docs.aws.amazon.com/AmazonS3/latest/userguide/using-presigned-url.html).
+The primary submission Lambda accepts an externally generated `downloadUrl` and does not receive its expiry time or provide a refresh mechanism. The separate in-repository web producer creates a 3,600-second URL, but that value is not assumed to describe the external production service. In either path, the queue can retain messages beyond a finite URL lifetime, a backlog can delay first processing, and retries occur later. S3 also limits presigned URL validity to the underlying credential lifetime. See [Download and upload objects with presigned URLs](https://docs.aws.amazon.com/AmazonS3/latest/userguide/using-presigned-url.html).
 
-The selected target intentionally preserves this contract. It must therefore treat HTTP 401/403/404 as terminal, alert on queue age well before one hour, and expose the limitation in operations documentation. An AWS-native bucket/key contract would remove this risk but is outside this target.
+The selected target intentionally preserves this URL contract. It must therefore treat HTTP 401/403/404 as terminal, make the external URL TTL an explicit operational configuration, and alert on queue age before that configured TTL. An AWS-native bucket/key contract would remove this risk but is outside this target.
 
 #### H5. Download has no resource bound
 
@@ -727,6 +733,8 @@ The target must preserve:
 
 - SQS as the invocation mechanism.
 - Required message body fields named `downloadUrl` and `callbackUrl`.
+- The FIFO source queue and per-group ordering semantics.
+- External-service ownership of `MessageGroupId`; the OCR Lambda must remain agnostic to group selection.
 - Existing success and failure payload fields.
 - `inferenceType: "onnxtr"`.
 - The nested page/block/line/word result structure.
@@ -778,6 +786,8 @@ Queue requirements:
 | Batch size | 1 |
 | Partial responses | Enabled |
 | Function timeout | 180 seconds |
+
+`MessageGroupId` assignment is not changed by this target. The submission Lambda continues forwarding the value selected by the external service, and the OCR event source continues consuming the FIFO queue. Capacity planning must use the real distribution of active message groups rather than assume a single global group.
 
 On success, return an empty `batchItemFailures`. On retryable failure, return exactly the current record's non-empty SQS `messageId`. The handler must never return a failed ID when `messageId` is absent; an invalid AWS envelope must fail the invocation so Lambda retries the complete batch.
 
@@ -1164,7 +1174,11 @@ Cloud integration tests must run against an isolated SST stage because mocks do 
 
 ### 10.6 Performance acceptance
 
-Measure in an AWS non-production stage using the production-equivalent 2,048 MB, x86-64, 512 MB `/tmp`, batch-size-one configuration and a fixed, sanitized representative corpus.
+Measure with a fixed, sanitized representative corpus in an AWS non-production stage. Baseline acceptance uses the production-equivalent 2,048 MB, x86-64, 512 MB `/tmp`, batch-size-one configuration.
+
+Invoke the benchmark target synchronously through the Lambda Invoke API; do not create a benchmark queue or event-source mapping. Each invocation supplies a synthetic one-record SQS event matching sections 5.1 and 5.2, including a unique test `messageId`, a sanitized fixture `downloadUrl`, and an isolated test `callbackUrl`. This exercises the production handler path without introducing the stale `{s3Key}` payload as a second contract.
+
+Use a dedicated benchmark Lambda when a test varies memory, architecture, model files, ONNX Runtime settings, concurrency, or cold-start strategy. An unchanged non-production control may reuse the approved production container digest. Direct benchmark invocation is test-harness behavior, not a supported production invocation mode, and it must not mutate or invoke the production Lambda, production event source, production queue, or the external service's `MessageGroupId` policy. Queue throughput and FIFO group allocation are outside the performance benchmark; report per-document Lambda duration, stage timings, memory, storage, cost, and OCR accuracy instead.
 
 | Criterion | Acceptance threshold |
 | --- | ---: |
@@ -1191,7 +1205,7 @@ The changes described here require implementation in separate, reviewed changese
 6. Make callback verification mandatory and enable idempotent persistence.
 7. Add URL allowlists, DNS/IP checks, redirect rejection, bounded streaming, and image verification.
 8. Align Python 3.13 and rebuild from pinned, frozen dependencies.
-9. Deploy to an isolated SST stage and run forced success/failure/retry/DLQ tests.
+9. Deploy to an isolated SST stage and run forced success/failure/retry/DLQ tests. Run configuration and model benchmarks by invoking a dedicated benchmark Lambda directly; do not provision a benchmark queue or mutate the production worker.
 10. Change event-source batch size, partial-response setting, queue visibility, and max receive count in the same infrastructure release.
 11. Verify the synthesized and deployed event source contains `ReportBatchItemFailures` before production traffic resumes.
 12. Deploy production during a low-traffic window.
@@ -1295,6 +1309,7 @@ These links already appear in [`README.md`](../README.md):
 
 - [Using Lambda with Amazon SQS](https://docs.aws.amazon.com/lambda/latest/dg/with-sqs.html) — polling, batching, at-least-once delivery, and idempotency.
 - [Creating and configuring an SQS event-source mapping](https://docs.aws.amazon.com/lambda/latest/dg/services-sqs-configure.html) — visibility timeout, batch sizing, and DLQ guidance.
+- [Configuring scaling behavior for SQS event-source mappings](https://docs.aws.amazon.com/lambda/latest/dg/services-sqs-scaling.html) — FIFO message-group ordering and the relationship between active groups and Lambda concurrency.
 - [Handling errors for an SQS event source](https://docs.aws.amazon.com/lambda/latest/dg/services-sqs-errorhandling.html) — `ReportBatchItemFailures` and FIFO behavior.
 - [Lambda container image requirements](https://docs.aws.amazon.com/lambda/latest/dg/images-create.html) — image compatibility, read-only filesystem, `/tmp`, architecture, and size.
 - [Deploy Python Lambda functions with container images](https://docs.aws.amazon.com/lambda/latest/dg/python-image.html) — AWS base images, ECR, and image digest deployment.
@@ -1315,7 +1330,10 @@ These links already appear in [`README.md`](../README.md):
 - The implementation task for this document changes no application, infrastructure, or AWS resource.
 - Future hardening retains the required `downloadUrl` and `callbackUrl` body fields.
 - Security hardening may add callback headers and environment configuration without adding required body fields.
-- SQS is the only supported target invocation mode.
+- SQS is the only supported production invocation mode. Direct Lambda invocation is permitted only for the benchmark harness using a synthetic SQS-shaped event.
+- The SQS source and DLQ remain FIFO; changing them to standard queues is out of scope and prohibited by this specification.
+- The external service remains authoritative for `MessageGroupId`; the submission Lambda forwards it and the OCR Lambda does not inspect it.
+- Performance experiments invoke a non-production Lambda directly and do not create a queue or event-source mapping; they must not change production message-group behavior.
 - Direct `{s3Key}` invocation is unsupported and should be retired separately.
 - JPEG and PNG are the supported target formats.
 - The default source document limit is 20 MiB and 50 million pixels.
