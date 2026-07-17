@@ -9,6 +9,7 @@
     "sst": "*"
   },
   "scripts": {
+    "onnxtr-benchmark": "sst shell tsx src/onnxtr-benchmark.ts",
     "onnxtr-extract": "sst shell --stage production tsx src/onnxtr-extract.ts",
     "shell": "sst shell tsx"
   },

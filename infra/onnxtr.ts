@@ -1,15 +1,14 @@
-import { documentsBucket } from "./storage";
-
+// Direct-invocation target for controlled benchmarks. Production OCR traffic
+// continues to enter through the FIFO subscription in queue.ts.
 export const onnxtrFunction = new sst.aws.Function("OnnxTRFunction", {
 	handler: "packages/onnxtr-lambda/handler.lambda_handler",
-	runtime: "python3.14",
+	runtime: "python3.13",
 	python: { container: true },
-	timeout: "120 seconds",
+	timeout: "3 minutes",
 	memory: "2048 MB",
-	link: [documentsBucket],
 	environment: {
-		DOCUMENTS_BUCKET_NAME: documentsBucket.name,
-		ONNXTR_CACHE_DIR: "/tmp/onnxtr_cache",
+		ONNXTR_CACHE_DIR: "/opt/onnxtr_cache",
+		ONNXTR_MODEL_MANIFEST: "/opt/onnxtr_cache/model-manifest.json",
 		ONNXTR_MULTIPROCESSING_DISABLE: "TRUE",
 	},
 });

@@ -5,7 +5,7 @@
 | System | `packages/onnxtr-lambda` |
 | Status | Production |
 | Review date | 2026-07-17 |
-| Document status | Current-state review and production-hardening target |
+| Document status | Production snapshot, hardening target, and repository implementation pending deployment |
 | Target compatibility | Keep the required `downloadUrl` and `callbackUrl` message fields unchanged |
 
 ## Executive summary
@@ -35,7 +35,7 @@ The implementation was traced across the package and its immediate boundaries:
 | [`packages/onnxtr-lambda/export_models.py`](../packages/onnxtr-lambda/export_models.py) | Build-time model initialization and cache population |
 | [`packages/onnxtr-lambda/Dockerfile`](../packages/onnxtr-lambda/Dockerfile) | Builder and runtime container assembly |
 | [`packages/onnxtr-lambda/pyproject.toml`](../packages/onnxtr-lambda/pyproject.toml) | Declared Python compatibility and dependencies |
-| [`infra/onnxtr.ts`](../infra/onnxtr.ts) | Separate, directly invokable OnnxTR function definition |
+| [`infra/onnxtr.ts`](../infra/onnxtr.ts) | Separate direct-invocation benchmark function; not a production event source |
 | [`infra/queue.ts`](../infra/queue.ts) | FIFO source queue, DLQ, and production subscriber definition |
 | [`infra/submit.ts`](../infra/submit.ts) | Authenticated submission Function URL and queue permissions |
 | [`packages/functions/src/submit-document.ts`](../packages/functions/src/submit-document.ts) | Primary production submission boundary; accepts the externally selected FIFO message group |
@@ -45,8 +45,10 @@ The implementation was traced across the package and its immediate boundaries:
 | [`packages/web/src/lib/server-fns.ts`](../packages/web/src/lib/server-fns.ts) | In-repository web producer path; not the authoritative production submission boundary |
 | [`packages/web/src/lib/documents.ts`](../packages/web/src/lib/documents.ts) | One-hour S3 presigned URL generation used by the in-repository web producer path |
 | [`packages/scripts/src/onnxtr-extract.ts`](../packages/scripts/src/onnxtr-extract.ts) | Stale direct-invocation client |
+| [`packages/scripts/src/onnxtr-benchmark.ts`](../packages/scripts/src/onnxtr-benchmark.ts) | Direct Lambda benchmark harness using a synthetic one-record SQS event |
+| [`packages/onnxtr-lambda/tests/test_handler.py`](../packages/onnxtr-lambda/tests/test_handler.py) | Unit and handler-contract regression tests |
 | [`README.md`](../README.md) | Existing technology documentation links |
-| [`uv.lock`](../uv.lock) | Workspace dependency resolution; not consumed by the current Docker build |
+| [`uv.lock`](../uv.lock) | Frozen workspace resolution exported by SST and installed with hashes during the container build |
 
 Line references in this document describe the files as reviewed on 2026-07-17 and may move after edits.
 
@@ -70,6 +72,30 @@ No SQS messages were sent, no Lambda was invoked, no callback was called, no pay
 - Approximate SQS depths are point-in-time values.
 - ECR metadata reported an image size but no scan result. That does not prove whether another registry-level scanner exists.
 - Review findings describe the repository and production state at the review date, not a guarantee about later deployments.
+
+### 1.4 Repository implementation status
+
+The production observations and severity ratings in this document remain a snapshot of the deployment inspected on 2026-07-17. The following changes are implemented in the repository but were not deployed or exercised against production as part of this task:
+
+| Area | Prepared implementation |
+| --- | --- |
+| FIFO delivery | Keeps the FIFO source and external ownership of `MessageGroupId`; configures batch size one, partial batch responses, 18-minute visibility, and five receives before DLQ |
+| Model startup | Bakes and verifies a detector/recognizer manifest, then constructs both models from explicit local paths so cold startup does not hash the approximately 197.5 MB cache through OnnxTR's URL-download path |
+| Downloads | Reuses a Requests session, streams in bounded chunks, enforces a configurable 20 MiB limit, separates connect/read timeouts, disables redirects, and cleans partial files |
+| Serialization | Walks the result hierarchy once while producing JSON, full text, confidence totals, page count, and normalized scalar values |
+| Privacy and errors | Removes URL logging and public tracebacks, uses timezone-aware UTC timestamps, validates the basic SQS body shape, and stops after the first FIFO record failure |
+| Reproducibility | Aligns Python 3.13, installs a frozen hash-checked export of `uv.lock`, pins the base and UV image digests, pins Requests and Pillow, removes unused `boto3`, and uses an exact reviewed OnnxTR commit |
+| Benchmarking | Invokes the separate non-production Lambda directly with a synthetic SQS event; it creates no queue and does not alter FIFO groups or the production event source |
+
+Local verification completed for this repository state:
+
+- All 10 package tests pass under the locked environment.
+- The final x86-64 image builds successfully and imports the handler.
+- A network-disabled container initializes the locally baked predictor in approximately 2.3 seconds in local Docker and completes an OCR smoke test. This is evidence that runtime model download is unnecessary, not an AWS Lambda performance benchmark.
+- The built image contains two model files totaling 197,506,608 bytes and is approximately 547 MB locally. ECR compressed size and Lambda runtime measurements can differ.
+- Targeted TypeScript checks pass for the queue, benchmark function, and benchmark client.
+
+These controls remain open: URL host/IP validation, image byte and pixel validation, callback signing and idempotency, stable retry/terminal error codes, custom metrics and alarms, container vulnerability policy, and controlled AWS performance/accuracy benchmarks. A finding is not considered closed in production until the corresponding deployment and acceptance checks succeed.
 
 ## 2. Purpose and scope
 
@@ -118,13 +144,14 @@ The following components are covered only where they define a Lambda interface o
 
 The supported production contract is an Amazon SQS event containing `Records`.
 
-The separately declared function in [`infra/onnxtr.ts`](../infra/onnxtr.ts) and [`onnxtr-extract.ts`](../packages/scripts/src/onnxtr-extract.ts) are incompatible with the reviewed handler:
+The legacy [`onnxtr-extract.ts`](../packages/scripts/src/onnxtr-extract.ts) client is incompatible with the handler:
 
 - The script invokes the function with `{ "s3Key": "..." }`.
 - `lambda_handler` immediately accesses `event["Records"]`.
-- The direct function links the document bucket and exposes `DOCUMENTS_BUCKET_NAME`, but the handler does not read either value.
 
 Direct `{s3Key}` invocation is therefore stale and unsupported. The target state retains SQS as the sole public invocation contract rather than adding a second adapter.
+
+[`infra/onnxtr.ts`](../infra/onnxtr.ts) is retained as an isolated benchmark target. [`onnxtr-benchmark.ts`](../packages/scripts/src/onnxtr-benchmark.ts) invokes it synchronously with the same one-record SQS-shaped event the production handler consumes. This is test-harness behavior only: the benchmark function has no event-source mapping, creates no queue, and does not change or infer `MessageGroupId`.
 
 ## 3. Current architecture and data flow
 
@@ -163,7 +190,9 @@ The FIFO group is therefore transport metadata rather than part of the OnnxTR wo
 
 ### 3.2 Handler behavior
 
-For every record in `event["Records"]`, `handler.py:124-227`:
+#### Reviewed production baseline
+
+For every record in `event["Records"]`, the reviewed production handler:
 
 1. Parses `record["body"]` as JSON.
 2. Reads `downloadUrl` and `callbackUrl` through direct dictionary access.
@@ -180,9 +209,25 @@ For every record in `event["Records"]`, `handler.py:124-227`:
 
 The current scalar Requests timeout applies to connect and read operations; it is not a wall-clock deadline for the complete download. Requests follows redirects by default. See the [Requests API](https://docs.python-requests.org/en/stable/api/).
 
+#### Prepared repository implementation
+
+The prepared handler retains the event and callback payload shapes but changes the internal processing path:
+
+1. It validates `Records`, the record object, `messageId`, parsed body, and both required string fields before processing.
+2. It logs safe event names and message/request correlation fields, never either URL or a callback payload.
+3. It reuses a module-level `requests.Session`, disables redirects, and streams downloads to a generated temporary file with a configurable 20 MiB limit.
+4. It separates connect and read timeouts and removes a partial temporary file after any download failure.
+5. It loads detector and recognizer files from manifest-verified local paths and reuses the global predictor.
+6. It performs a single hierarchy walk for serialization, text construction, word-confidence aggregation, and page count.
+7. It releases the OnnxTR result and source-document references before posting the callback where possible.
+8. It sends a sanitized public failure message rather than a stack trace.
+9. After a failed FIFO record, it reports that record and all remaining unprocessed record IDs as failures. The configured batch size of one makes this a defensive behavior rather than a normal multi-record path.
+
+Redirect rejection and bounded streaming are implemented. Complete SSRF validation and trusted image decoding are still required by sections 8.3 and 8.4.
+
 ### 3.3 Cold and warm execution
 
-#### Image build
+#### Reviewed production image build
 
 `export_models.py` sets `ONNXTR_MULTIPROCESSING_DISABLE=TRUE`, constructs the same detector/recognizer pair used at runtime, and causes model files to be populated beneath `/opt/onnxtr_cache`.
 
@@ -192,7 +237,7 @@ The final image copies:
 - `/opt/onnxtr_cache` from the builder stage.
 - `handler.py` into the Lambda task root.
 
-#### Cold invocation
+#### Reviewed production cold invocation
 
 The first call to `get_model()` in an execution environment:
 
@@ -205,6 +250,12 @@ The first call to `get_model()` in an execution environment:
 
 The import and predictor construction happen during the first invocation rather than module initialization, so their duration is included in the first record's `inferenceTimeMs`.
 
+#### Prepared build and cold invocation
+
+The prepared image build initializes `db_resnet50` and `parseq`, locates their exact model files, verifies each filename hash prefix, computes a chunked SHA-256 digest and size, and writes `model-manifest.json` beneath `/opt/onnxtr_cache`. The build fails if either required artifact is absent or inconsistent.
+
+At cold invocation, the handler validates the manifest structure and local file sizes, then passes explicit model objects created with the local `model_path` values to `ocr_predictor`. It does not create a `/tmp` cache symlink, enumerate model names, or invoke OnnxTR's URL-download helper. Runtime SHA-256 recomputation is deliberately omitted because the immutable image build verified the digest; this removes a full read of both model files from the cold path. Missing or malformed artifacts fail locally rather than initiating network access.
+
 #### Warm invocation
 
 `_model` remains populated while Lambda reuses the execution environment. `/tmp` also persists across warm invocations, although the implementation removes each source document after use. Lambda execution-environment reuse is an optimization, not a lifecycle guarantee; see [AWS Lambda best practices](https://docs.aws.amazon.com/lambda/latest/dg/best-practices.html).
@@ -215,14 +266,14 @@ The import and predictor construction happen during the first invocation rather 
 | --- | --- | --- | --- |
 | Deployment format | `python.container: true` | Lambda container image | Appropriate for native and large OCR dependencies |
 | Architecture | Not explicitly set | x86-64 | Must match the built ONNX/OpenCV wheels |
-| Python | Docker `python:3.13` | Python 3.13 inside image | Effective runtime |
-| SST runtime | `python3.14` | Lambda `Runtime` is unset for image functions | Used by SST tooling, but inconsistent with image |
-| Package Python | `>=3.11` | Allows 3.11 through future major versions | Too broad for reproducibility |
-| OnnxTR | `onnxtr[cpu-headless]>=0.8` | Lockfile resolves 0.8.1; Docker does not use lockfile | Deployed version depends on build time |
-| ONNX Runtime | Transitive CPU dependency | Lockfile resolves 1.27.0; Docker build is independent | Native dependency must be frozen and scanned |
-| HTTP client | `requests`, unpinned in Docker | Installed into the image | Required for download and callback |
-| Image library | Pillow, unpinned in Docker | Installed into the image | Declared but not used for validation today |
-| AWS SDK | `boto3` in `pyproject.toml` | Not explicitly installed by Docker and not used by handler | Metadata/image dependency mismatch |
+| Python | Docker Python 3.13 image pinned by digest | Python 3.13 inside reviewed production image | Aligned in prepared repository; pending deployment |
+| SST runtime | `python3.13` | Lambda `Runtime` is unset for image functions | Aligned with image and local tooling |
+| Package Python | `>=3.13,<3.14` | Reviewed image used 3.13 | Exact minor line enforced by the lock resolution |
+| OnnxTR | Exact archive at commit `52d61362885033b0d026f232efcc3cbea9d23052` (`0.8.2a0`) | Reviewed production preceded this pin | Includes reviewed crop-padding and point-ordering fixes; pending deployment |
+| ONNX Runtime | Transitive CPU dependency from `uv.lock` | Reviewed production build was independent of the lock | Frozen and hash-checked in prepared build; still requires scanning |
+| HTTP client | `requests==2.34.2` | Installed in reviewed production image | Exact direct version plus transitive hashes |
+| Image library | `pillow==12.2.0` | Installed in reviewed production image | Still not used for trusted image validation |
+| AWS SDK | Removed from package | Was unused by the reviewed handler | Benchmark client uses AWS SDK v3 in its TypeScript package |
 | Detector | `db_resnet50` | `db_resnet50` | Fixed in code and build export |
 | Recognizer | `parseq` | `parseq` | Fixed in code and build export |
 | Page assumption | Straight | `assume_straight_pages=True` | Appropriate for reviewed phone screenshots |
@@ -238,33 +289,51 @@ AWS requires Lambda container images to operate with a read-only root filesystem
 
 ### 4.1 Model configuration
 
-The predictor is created with:
+The reviewed production predictor was created from architecture names. The prepared runtime resolves the same architectures to explicit baked model paths first:
 
 ```python
+detector = db_resnet50(model_path=str(detector_path))
+recognizer = parseq(model_path=str(recognizer_path))
+
 ocr_predictor(
-    det_arch="db_resnet50",
-    reco_arch="parseq",
+    det_arch=detector,
+    reco_arch=recognizer,
     assume_straight_pages=True,
     preserve_aspect_ratio=True,
     disable_page_orientation=True,
     disable_crop_orientation=True,
     det_bs=1,
+    reco_bs=512,
 )
 ```
 
 OnnxTR documents image loading, straight-page behavior, orientation controls, supported architectures, and the `ONNXTR_` environment-variable prefix in its [official repository](https://github.com/felixdittrich92/OnnxTR).
 
-### 4.2 Reproducibility gap
+### 4.2 Reproducibility gap and prepared resolution
 
-The committed `uv.lock` is not used by the Dockerfile. The image instead installs:
+The reviewed production build installed broad dependency constraints with mutable UV and Lambda base-image tags and did not consume `uv.lock`. Two builds from the same commit could therefore differ.
 
-```text
-onnxtr[cpu-headless]>=0.8
-pillow
-requests
-```
+The prepared Dockerfile pins the UV and AWS Lambda base images by tag and digest. SST exports the committed `uv.lock` for the `onnxtr-lambda` package, and `uv pip install --require-hashes` installs that exact resolution. Direct dependencies are exact, OnnxTR is an immutable commit archive with a locked source hash, and the build-generated model manifest records exact artifact hashes and sizes.
 
-from mutable package indexes using `ghcr.io/astral-sh/uv:latest` and a mutable AWS Python base-image tag. Two builds from the same commit can therefore contain different runtimes, tools, wheels, model artifacts, or transitive dependencies.
+The remaining release controls are an SBOM, dependency/image scanning, a digest-update process, and a clean-build reproducibility check. A Docker image is not guaranteed to be byte-for-byte identical merely because Python packages and parent images are pinned; timestamps and model-host responses must also be controlled or compared through an approved inventory rather than a raw image digest alone.
+
+### 4.3 Upstream code audit and optimization decisions
+
+The optimization review used the exact pinned OnnxTR source, rather than assuming docTR and OnnxTR have identical runtime internals:
+
+| Upstream behavior | Decision |
+| --- | --- |
+| [`Engine`](https://github.com/felixdittrich92/OnnxTR/blob/52d61362885033b0d026f232efcc3cbea9d23052/onnxtr/models/engine.py) calls `download_from_url` for an HTTP model value but accepts a local filesystem value directly | Construct detector and recognizer objects from manifest-controlled local paths before building the OCR predictor; implemented |
+| [`download_from_url`](https://github.com/felixdittrich92/OnnxTR/blob/52d61362885033b0d026f232efcc3cbea9d23052/onnxtr/utils/data.py) verifies an existing cached artifact by reading it into memory and hashing it | Verify model SHA-256 during the image build and check immutable-image file sizes at runtime; implemented, removing repeated cold-start reads |
+| [`ocr_predictor`](https://github.com/felixdittrich92/OnnxTR/blob/52d61362885033b0d026f232efcc3cbea9d23052/onnxtr/models/zoo.py) accepts model objects and defaults recognition batching to 512 | Keep 512 as the compatibility default and expose `ONNXTR_RECO_BATCH_SIZE` only for controlled benchmarks; do not claim a gain from the unchanged default |
+| [`EngineConfig`](https://github.com/felixdittrich92/OnnxTR/blob/52d61362885033b0d026f232efcc3cbea9d23052/onnxtr/models/engine.py) already enables the CPU arena and all graph optimizations, uses sequential execution, and leaves ONNX Runtime thread counts automatic | Do not override ONNX Runtime session/thread settings without Lambda measurements; a custom `SessionOptions` must reproduce every desired default explicitly |
+| OnnxTR supports `load_in_8_bit`, alternative detector/recognizer architectures, and advanced execution providers | Treat quantization, OpenVINO, and model substitution as accuracy/performance experiments, not safe in-place optimizations; benchmark against the fixed corpus before changing production output |
+| [`multithread_exec`](https://github.com/felixdittrich92/OnnxTR/blob/52d61362885033b0d026f232efcc3cbea9d23052/onnxtr/utils/multithreading.py) specifically documents Lambda `/dev/shm` constraints | Retain `ONNXTR_MULTIPROCESSING_DISABLE=TRUE` |
+| [`DocumentFile.from_images`](https://github.com/felixdittrich92/OnnxTR/blob/52d61362885033b0d026f232efcc3cbea9d23052/onnxtr/io/reader.py) decodes one supplied path into a NumPy page | Keep path-based decode and delete the file in `finally`; add trusted format/pixel validation before relying on OpenCV for security classification |
+
+The package is pinned to [commit `52d6136`](https://github.com/felixdittrich92/OnnxTR/commit/52d61362885033b0d026f232efcc3cbea9d23052), which includes upstream fixes for crop indexing and padded detection score handling after the reviewed 0.8.1 release. The network-disabled smoke test confirms that the prepared local-path loader needs no model download. It does not establish that the chosen model pair, batch setting, thread count, memory tier, or full- versus 8-bit precision is optimal on Lambda.
+
+The next performance matrix should therefore vary one factor at a time through direct invocation: Lambda memory/vCPU tier, full versus supported 8-bit artifacts, detector/recognizer pair, `reco_bs`, and explicit ONNX Runtime thread settings. Every candidate must pass the same OCR token/geometry fixtures and peak-memory thresholds. Upstream benchmark numbers are directional only because their hardware, datasets, model pair, and runtime settings differ from this Lambda workload.
 
 ## 5. Current public interfaces
 
@@ -308,7 +377,7 @@ Current JSON Schema, describing what the handler actually expects:
 }
 ```
 
-Current validation consists only of `json.loads` and direct dictionary lookup. The handler does not currently enforce the schema, string types, URL syntax, schemes, destinations, ports, callback path, or maximum field lengths.
+The reviewed production validation consisted only of `json.loads` and direct dictionary lookup. The prepared handler now requires an object and non-empty string values, but it still does not enforce URL syntax, schemes, destinations, ports, callback path, or maximum field lengths.
 
 The target retains both required fields and `additionalProperties: true` for compatibility, while adding the validation rules in section 8.
 
@@ -460,7 +529,7 @@ The runtime success payload contains `success: true`, but `OnnxTRRawInference` i
 
 ### 5.4 Failed callback
 
-Current payload:
+Reviewed production payload:
 
 ```json
 {
@@ -469,7 +538,7 @@ Current payload:
 }
 ```
 
-Current behavior exposes the complete Python traceback to the callback. The target keeps the two required fields but makes `error` a stable, sanitized public message. It may add an optional `errorCode` in a future backwards-compatible revision, but this document does not require a new payload field.
+The reviewed production behavior exposed the complete Python traceback to the callback. The prepared handler keeps the two required fields and sends `"Document processing failed."`; the target keeps that public surface sanitized and makes internal classification stable. It may add an optional `errorCode` in a future backwards-compatible revision, but this document does not require a new payload field.
 
 Target example:
 
@@ -484,7 +553,7 @@ Internal stack traces belong only in restricted CloudWatch logs and must be corr
 
 ### 5.5 Callback HTTP semantics
 
-Current behavior:
+Reviewed production behavior:
 
 - Method: `POST`.
 - Content type: `application/json`.
@@ -495,6 +564,8 @@ Current behavior:
 - Redirects: followed by default.
 
 The target HTTP semantics are defined in section 8.5.
+
+The prepared client already separates connect/read timeouts and rejects redirects for both requests. Callback authentication, exact-body signing, idempotency headers, response-size bounds, and retry classification remain target requirements.
 
 ### 5.6 SQS handler response
 
@@ -565,6 +636,8 @@ The 299 processed-document events exceeding 248 invocation reports is consistent
 
 ### 7.1 Summary
 
+Severity is assigned to the inspected production deployment, not merely to the current working tree. The prepared repository state addresses C1, C3, H1-H3, the byte-streaming portion of H5, H7-H10, L1-L4, and part of M1/M2. Those findings remain open operationally until deployment and acceptance. C2, C4, H4, H6, M3-M5, image/pixel validation, and the full observability target still require implementation.
+
 | ID | Severity | Finding | Primary impact | Target control |
 | --- | --- | --- | --- | --- |
 | C1 | Critical | Partial SQS response is not enabled | Failed documents may be deleted instead of retried | Batch size 1 and `partialResponses: true` |
@@ -581,8 +654,8 @@ The 299 processed-document events exceeding 248 invocation reports is consistent
 | H8 | High | `callback_url` may be unbound | Secondary error obscures the original malformed message | Parse/validate before the processing try block |
 | H9 | High | Python declarations disagree | Local/prod drift and native wheel mismatch | Pin Python 3.13 everywhere |
 | H10 | High | Docker build ignores lockfile | Non-reproducible and unreviewed dependency changes | Frozen lockfile build and pinned image digests |
-| H11 | High | Direct invocation contract is stale | Broken operational script and duplicate infrastructure | Declare SQS-only and retire stale resource/client |
-| M1 | Medium | Package has no tests | Regressions reach production undetected | Test matrix in section 10 |
+| H11 | High | Legacy `{s3Key}` direct invocation contract is stale | Broken operational script | Keep SQS-only production; retire the legacy client and use SQS-shaped direct events only for benchmarks |
+| M1 | Medium | Reviewed package had no tests | Regressions reach production undetected | Initial tests prepared; complete the matrix in section 10 |
 | M2 | Medium | No safe correlation or custom metrics | Slow incident isolation | Structured logs, EMF metrics, alarms |
 | M3 | Medium | URL path determines filename/type | Misclassification and unsafe resource use | Generate filename and verify image bytes |
 | M4 | Medium | Errors have no retry classification | Poison retries or silent terminal failures | Stable terminal/retryable taxonomy |
@@ -602,6 +675,8 @@ Without `ReportBatchItemFailures`, Lambda sees a normally returned handler respo
 
 Target: configure `batch.size: 1` and `batch.partialResponses: true`, verify the deployed mapping contains `ReportBatchItemFailures`, and integration-test a forced retry. AWS explains the required setting in [Handling errors for an SQS event source](https://docs.aws.amazon.com/lambda/latest/dg/services-sqs-errorhandling.html).
 
+Prepared status: `infra/queue.ts` configures both values. Production verification and a forced retry test are still required.
+
 #### C2. Arbitrary outbound URLs create an SSRF boundary
 
 `downloadUrl` is passed to `requests.get`, and `callbackUrl` is passed to `requests.post`. Neither is validated. Requests follows redirects by default.
@@ -616,6 +691,8 @@ Target: the validation controls in section 8.3. The [OWASP SSRF Prevention Cheat
 
 Target: never record either complete URL, query component, request headers, or callback body. Correlate exclusively with Lambda request ID and SQS message ID.
 
+Prepared status: application logs contain neither URL. Existing historical logs retain their own configured CloudWatch retention and should be handled according to the incident/data-retention policy.
+
 #### C4. Callback is public and unsigned
 
 The callback function is configured with `url: true`. SST defaults Function URL authorization to `none`, and the deployed URL confirms `AuthType: NONE` with permissive CORS. The callback accepts a document ID from its path and a caller-supplied success payload, casts it to `OnnxTRRawInference`, and persists it.
@@ -628,15 +705,21 @@ Target: preserve the URL/body contract but sign every request as specified in se
 
 The source queue visibility timeout is 240 seconds and the subscriber timeout is 180 seconds. AWS recommends visibility of at least six times the function timeout to leave room for throttling and retries: 1,080 seconds in this configuration. See [Creating and configuring an SQS event source mapping](https://docs.aws.amazon.com/lambda/latest/dg/services-sqs-configure.html).
 
+Prepared status: the FIFO queue visibility is 18 minutes and redrive occurs after five receives. A DLQ alarm is still required.
+
 #### H2. A ten-record batch cannot be bounded safely
 
 The handler processes records sequentially. Production p95 invocation duration was approximately 88.8 seconds, and the maximum was approximately 100 seconds, while the total batch timeout is 180 seconds. A ten-record batch has no defensible worst-case budget when each record may spend up to 120 seconds downloading, initialize the model, run OCR, and spend 30 seconds on callback delivery.
 
 Target: one record per invocation. Model reuse still occurs across warm invocations without coupling ten documents to one timeout.
 
+Prepared status: batch size one is configured while the FIFO queue and external `MessageGroupId` policy remain unchanged.
+
 #### H3. FIFO processing continues after a record failure
 
 The loop appends a failure and continues to later records. When partial responses are enabled for a FIFO queue, AWS says to stop after the first failure and return all failed and unprocessed records to preserve ordering. Batch size one makes this requirement automatic.
+
+Prepared status: the handler stops at the first failure and reports every remaining record as unprocessed; batch size one is the configured normal path.
 
 #### H4. Presigned URL lifetime and queue lifetime can differ
 
@@ -650,6 +733,8 @@ The selected target intentionally preserves this URL contract. It must therefore
 
 Target: section 8.4. Requests documents that `stream=True` plus `iter_content` avoids reading a large response into memory at once.
 
+Prepared status: streaming, `Content-Length` precheck, streamed-byte enforcement, and partial-file cleanup are implemented with a default 20 MiB limit. MIME, decoded format, and pixel-count validation remain open.
+
 #### H6. Callback retries are not idempotent
 
 Any callback failure is handled as a document failure, which will repeat download and OCR once SQS retries work. The downstream `saveInference` uses `list_append`, so repeated successful callbacks append duplicate inference records.
@@ -662,11 +747,15 @@ The current `error` field contains `traceback.format_exc()`. Exceptions can incl
 
 Target: log the traceback internally with safe correlation and send only a stable public message.
 
+Prepared status: callback consumers receive a generic message and logs contain only the exception type. Stable internal codes and restricted stack-trace logging remain open.
+
 #### H8. Error handling can reference an uninitialized callback
 
 `callback_url` is assigned only after body parsing. If JSON parsing or `downloadUrl` lookup fails, the exception handler attempts to use `callback_url`, causing `UnboundLocalError`, which is swallowed. The SQS failure list is still updated, but the secondary error obscures intent and complicates testing.
 
 Target: validate the complete record into a typed value before entering processing; only attempt a failure callback when a validated callback URL exists.
+
+Prepared status: `_parse_record` validates both non-empty strings and `_safe_callback_url` never references an unassigned local. Complete URL validation remains open.
 
 #### H9. Runtime versions drift
 
@@ -678,23 +767,27 @@ For an image function, the Docker base defines the production interpreter; Lambd
 
 Target: Python 3.13 in all three locations, with `requires-python = ">=3.13,<3.14"`.
 
+Prepared status: SST, Docker, and package metadata now agree on Python 3.13.
+
 #### H10. Container inputs are mutable
 
 The Dockerfile ignores the workspace lock, uses `uv:latest`, uses an unpinned Lambda base tag, and permits any future OnnxTR version satisfying `>=0.8`.
 
 Target: section 8.8.
 
+Prepared status: the lock export, direct versions, source hash, and both parent image digests are pinned. SBOM/scanning and automated digest refresh remain open.
+
 #### H11. Direct function and script are stale
 
-The direct script sends `{s3Key}` and expects a synchronous OCR payload. The handler expects SQS and returns `batchItemFailures`. The direct function is deployed separately, carries unused bucket configuration, and was inactive at inspection.
+The legacy direct script sends `{s3Key}` and expects a synchronous OCR payload. The handler expects SQS and returns `batchItemFailures`. The separate direct function was inactive at inspection and carried unused bucket configuration.
 
-Target: mark both as deprecated, remove them in a separately reviewed cleanup, and do not add dual event detection to the OCR handler.
+Prepared status and target: bucket linkage was removed from the separate function and it is explicitly retained as a benchmark target. The new benchmark client sends a synthetic SQS-shaped event directly through the Lambda Invoke API and creates no queue. Retire the legacy `{s3Key}` client separately; do not add dual event detection to the OCR handler.
 
 ### 7.4 Medium and low findings
 
 #### Missing tests
 
-No `test`, `spec`, pytest configuration, fixtures, or package-level smoke tests were found. Syntax parsing alone cannot validate native dependencies, model cache behavior, AWS event semantics, or output compatibility.
+No `test`, `spec`, pytest configuration, fixtures, or package-level smoke tests existed in the reviewed baseline. The prepared repository adds 10 standard-library unit/contract tests covering hierarchy serialization, confidence aggregation, model-manifest validation, global model reuse, bounded streaming cleanup, handler success, and FIFO failure identifiers. Security, representative accuracy, Lambda Runtime Interface Emulator, AWS retry, and controlled performance tests remain open.
 
 #### Observability gaps
 
@@ -708,9 +801,13 @@ The temporary filename suffix comes from the URL path, including an empty suffix
 
 `datetime.utcnow().isoformat() + "Z"` creates a naive value and uses an API deprecated in modern Python. The target is `datetime.now(timezone.utc)` serialized with `Z`.
 
+Prepared status: the handler now emits timezone-aware UTC with the existing `Z` wire representation.
+
 #### Cache log volume
 
 Cold initialization recursively lists every cache filename. The target should report only file count, total bytes, required detector/recognizer presence, and timing.
+
+Prepared status: build logs report only model count and total bytes; runtime logs report architecture and timing without paths or filenames.
 
 ### 7.5 Positive observations
 
@@ -964,13 +1061,15 @@ AWS base images are updated over time and require rebuilding and updating the La
 
 ### 8.9 Environment variables
 
-| Variable | Current | Target |
+| Variable | Reviewed production | Prepared/target |
 | --- | --- | --- |
-| `ONNXTR_CACHE_DIR` | `/tmp/onnxtr_cache` | Retain; prepare safely from baked `/opt` cache |
+| `ONNXTR_CACHE_DIR` | `/tmp/onnxtr_cache` | `/opt/onnxtr_cache`; immutable baked models are opened directly |
+| `ONNXTR_MODEL_MANIFEST` | Absent | `/opt/onnxtr_cache/model-manifest.json`; implemented |
 | `ONNXTR_MULTIPROCESSING_DISABLE` | `TRUE` | Retain |
 | `DOWNLOAD_HOST_ALLOWLIST` | Absent | Required exact-host CSV |
 | `CALLBACK_HOST_ALLOWLIST` | Absent | Required exact-host CSV |
-| `MAX_DOCUMENT_BYTES` | Absent | Optional; default 20 MiB |
+| `MAX_DOCUMENT_BYTES` | Absent | Optional; default 20 MiB; implemented |
+| `ONNXTR_RECO_BATCH_SIZE` | Implicit OnnxTR default | Optional; default 512; benchmark changes before production tuning |
 | `MAX_IMAGE_PIXELS` | Absent | Optional; default 50 million |
 | `CALLBACK_SIGNING_SECRET_ID` | Absent | Required secret reference, not secret value |
 | `LOG_LEVEL` | Absent | Optional; default `INFO` |
@@ -1083,6 +1182,8 @@ The existing public callback URL should eventually use IAM authentication or mov
 
 ## 10. Test and acceptance specification
 
+The items below are the complete acceptance matrix, not a claim that every test exists. The prepared 10-test suite covers the subset identified in section 7.4; unchecked security, container, AWS integration, and performance cases remain release work.
+
 ### 10.1 Unit tests
 
 | Area | Required cases |
@@ -1095,7 +1196,7 @@ The existing public callback URL should eventually use IAM authentication or mov
 | Full text | One page, multiple pages, empty pages |
 | Average confidence | Values, nulls, empty word set |
 | Model singleton | First construction once; warm reuse; failed init not cached as success |
-| Cache | `/opt` present, `/opt` missing, existing `/tmp`, symlink failure, required file missing |
+| Cache | Valid manifest, malformed/version-mismatched manifest, traversal path, `/opt` missing, required file missing, byte-size mismatch, build hash mismatch |
 | Timestamp | Timezone-aware UTC ending in `Z` |
 | Error taxonomy | Every exception maps to one stable code and classification |
 
@@ -1178,6 +1279,8 @@ Measure with a fixed, sanitized representative corpus in an AWS non-production s
 
 Invoke the benchmark target synchronously through the Lambda Invoke API; do not create a benchmark queue or event-source mapping. Each invocation supplies a synthetic one-record SQS event matching sections 5.1 and 5.2, including a unique test `messageId`, a sanitized fixture `downloadUrl`, and an isolated test `callbackUrl`. This exercises the production handler path without introducing the stale `{s3Key}` payload as a second contract.
 
+The prepared harness is run from `packages/scripts` with `bun run onnxtr-benchmark` after supplying `BENCHMARK_DOWNLOAD_URL`, `BENCHMARK_CALLBACK_URL`, and optionally `BENCHMARK_RUNS` (1-100) through a secure environment. Pass the intended non-production SST stage to `sst shell` through the script invocation; the harness refuses `SST_STAGE=production`. It prints wall-clock duration and the Lambda `REPORT` line for every run plus min/p50/p95/max/average. It fails on a Lambda function error or a returned batch failure. The callback endpoint must be isolated and idempotent because every benchmark run posts a real result.
+
 Use a dedicated benchmark Lambda when a test varies memory, architecture, model files, ONNX Runtime settings, concurrency, or cold-start strategy. An unchanged non-production control may reuse the approved production container digest. Direct benchmark invocation is test-harness behavior, not a supported production invocation mode, and it must not mutate or invoke the production Lambda, production event source, production queue, or the external service's `MessageGroupId` policy. Queue throughput and FIFO group allocation are outside the performance benchmark; report per-document Lambda duration, stage timings, memory, storage, cost, and OCR accuracy instead.
 
 | Criterion | Acceptance threshold |
@@ -1195,7 +1298,7 @@ The 90-second p95 is derived from the approximately 88.8-second production log-g
 
 ## 11. Rollout plan
 
-The changes described here require implementation in separate, reviewed changesets. Preserve the message body throughout.
+The optimization/reliability subset described in section 1.4 is prepared but not deployed. The remaining controls require additional reviewed changes. Preserve the message body throughout.
 
 1. Add unit, contract, security, and container smoke tests.
 2. Remove URL and payload logging before enabling any additional retry behavior.
@@ -1211,7 +1314,7 @@ The changes described here require implementation in separate, reviewed changese
 12. Deploy production during a low-traffic window.
 13. Monitor errors, callback failures, duration, memory, queue age, retries, and DLQ continuously for at least 24 hours.
 14. Re-baseline thresholds after two weeks of clean batch-size-one data.
-15. Remove the stale direct function/client in a separately scoped cleanup after confirming no external invoker depends on it.
+15. Remove the stale `{s3Key}` client in a separately scoped cleanup after confirming no external invoker depends on it. Retain the direct function only while it is an owned, access-controlled benchmark target.
 
 ### 11.1 Rollback
 
@@ -1295,7 +1398,14 @@ These links already appear in [`README.md`](../README.md):
 ### 13.2 OCR and runtime technologies
 
 - [OnnxTR source and documentation](https://github.com/felixdittrich92/OnnxTR) — predictor usage, image loading, architectures, environment variables, and project releases.
+- [Pinned OnnxTR commit](https://github.com/felixdittrich92/OnnxTR/commit/52d61362885033b0d026f232efcc3cbea9d23052) — exact post-0.8.1 source used by the prepared container and its crop/padding correctness fixes.
+- [Pinned OnnxTR predictor factory](https://github.com/felixdittrich92/OnnxTR/blob/52d61362885033b0d026f232efcc3cbea9d23052/onnxtr/models/zoo.py) — model-object inputs, batching, orientation, padding, and quantization options.
+- [Pinned OnnxTR engine](https://github.com/felixdittrich92/OnnxTR/blob/52d61362885033b0d026f232efcc3cbea9d23052/onnxtr/models/engine.py) — ONNX Runtime providers, session defaults, local-path behavior, and inference-session construction.
+- [Pinned OnnxTR model download/cache code](https://github.com/felixdittrich92/OnnxTR/blob/52d61362885033b0d026f232efcc3cbea9d23052/onnxtr/utils/data.py) — cache location, artifact hashing, and download fallback behavior that motivated build-time verification.
+- [Pinned OnnxTR Lambda multiprocessing note](https://github.com/felixdittrich92/OnnxTR/blob/52d61362885033b0d026f232efcc3cbea9d23052/onnxtr/utils/multithreading.py) — `/dev/shm` limitation and `ONNXTR_MULTIPROCESSING_DISABLE`.
+- [Pinned OnnxTR image reader](https://github.com/felixdittrich92/OnnxTR/blob/52d61362885033b0d026f232efcc3cbea9d23052/onnxtr/io/image.py) — OpenCV path/byte decoding and invalid-image behavior.
 - [ONNX Runtime documentation](https://onnxruntime.ai/docs/) — ONNX execution providers and runtime behavior.
+- [ONNX Runtime Python `SessionOptions`](https://onnxruntime.ai/docs/api/python/api_summary.html#onnxruntime.SessionOptions) — thread, graph, memory, and execution settings for benchmark candidates.
 - [Requests API](https://docs.python-requests.org/en/stable/api/) — streaming, timeout, TLS, and redirect behavior.
 - [UV documentation](https://docs.astral.sh/uv/) — lockfiles, frozen installs, and Python project management.
 
@@ -1327,7 +1437,7 @@ These links already appear in [`README.md`](../README.md):
 ## 14. Decisions and assumptions
 
 - This document describes production as observed on 2026-07-17.
-- The implementation task for this document changes no application, infrastructure, or AWS resource.
+- The prepared implementation changes repository application and infrastructure definitions but performs no deployment, invocation, message submission, callback, or AWS resource mutation.
 - Future hardening retains the required `downloadUrl` and `callbackUrl` body fields.
 - Security hardening may add callback headers and environment configuration without adding required body fields.
 - SQS is the only supported production invocation mode. Direct Lambda invocation is permitted only for the benchmark harness using a synthetic SQS-shaped event.

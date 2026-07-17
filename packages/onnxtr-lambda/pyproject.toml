@@ -2,10 +2,9 @@
 name = "onnxtr-lambda"
 version = "0.1.0"
 description = "OnnxTR OCR Lambda for document text extraction"
-requires-python = ">=3.11"
+requires-python = ">=3.13,<3.14"
 dependencies = [
-    "onnxtr[cpu-headless]>=0.8",
-    "boto3",
-    "pillow",
-    "requests",
+    "onnxtr[cpu-headless] @ https://github.com/felixdittrich92/OnnxTR/archive/52d61362885033b0d026f232efcc3cbea9d23052.tar.gz",
+    "pillow==12.2.0",
+    "requests==2.34.2",
 ]
