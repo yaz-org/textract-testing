@@ -85,12 +85,13 @@ The following subset was deployed and verified in production on 2026-07-17 witho
 | Downloads | Reuses a Requests session, streams in bounded chunks, enforces a configurable 20 MiB limit, separates connect/read timeouts, disables redirects, and cleans partial files |
 | Serialization | Walks the result hierarchy once while producing JSON, full text, confidence totals, page count, and normalized scalar values |
 | Privacy and errors | Removes URL logging and public tracebacks, uses timezone-aware UTC timestamps, validates the basic SQS body shape, and stops after the first FIFO record failure |
+| Callback authentication | Signs every non-benchmark success and sanitized failure callback with the processor-specific HMAC secret, a Unix timestamp, and a fresh UUIDv7 event ID; receiver verification remains open |
 | Reproducibility | Aligns Python 3.13, installs a frozen hash-checked export of `uv.lock`, pins the base and UV image digests, pins Requests and Pillow, removes unused `boto3`, and uses an exact reviewed OnnxTR commit |
 | Benchmarking | Invokes six temporary Lambdas directly with synthetic SQS events; benchmark mode suppresses callbacks, creates no queue, and does not alter FIFO groups or the production event source |
 
 Verification completed for this repository state:
 
-- All 16 Python package tests, 25 Bun benchmark/infrastructure tests, and 6 Telegram alarm notifier tests pass.
+- All 20 Python package tests, 25 Bun benchmark/infrastructure tests, and 6 Telegram alarm notifier tests pass.
 - The final x86-64 image builds successfully and imports the handler.
 - A network-disabled container initializes the locally baked predictor in approximately 2.3 seconds in local Docker and completes an OCR smoke test. This is evidence that runtime model download is unnecessary, not an AWS Lambda performance benchmark.
 - The built image contains two model files totaling 197,506,608 bytes and is approximately 547 MB locally. ECR compressed size and Lambda runtime measurements can differ.
@@ -101,7 +102,7 @@ Verification completed for this repository state:
 - The isolated benchmark application was removed afterward; zero temporary functions, log groups, roles, event-source mappings, or Function URLs remain.
 - Seven encrypted CloudWatch alarms notify the existing production Telegram channel. Controlled `ALARM` and `OK` transitions were delivered successfully, and the subscriber log group has metric filters for `document_failed` and `failure_callback_failed`.
 
-These controls remain open: URL host/IP validation, image byte and pixel validation, callback signing and idempotency, stable retry/terminal error codes, and broader stage-level timing metrics. Ground-truth OCR accuracy evaluation also remains separate from the completed output-equivalence benchmark.
+Sender signing is implemented on `main`. These controls remain open: receiver signature verification and freshness enforcement, business idempotency, URL host/IP validation, image byte and pixel validation, stable retry/terminal error codes, and broader stage-level timing metrics. Ground-truth OCR accuracy evaluation also remains separate from the completed output-equivalence benchmark.
 
 ## 2. Purpose and scope
 
@@ -683,14 +684,14 @@ The one-hour and 24-hour operational observations are time-gated. If no producti
 
 ### 7.1 Summary
 
-Severity records the impact at discovery. Deployment on 2026-07-17 closed C1, C3, H1-H3, the byte-streaming portion of H5, H7-H10, L1-L4, and part of M1/M2; C1 still lacks an intentionally forced production retry test. The 2026-07-18 promotion added the benchmark-selected memory/bytecode configuration, production image scanning evidence, failure metric filters, and seven Telegram-backed alarms. C2, C4, H4, H6, M3-M5, image/pixel validation, callback authentication/idempotency, and finer-grained timing metrics remain open.
+Severity records the impact at discovery. Deployment on 2026-07-17 closed C1, C3, H1-H3, the byte-streaming portion of H5, H7-H10, L1-L4, and part of M1/M2; C1 still lacks an intentionally forced production retry test. The 2026-07-18 promotion added the benchmark-selected memory/bytecode configuration, production image scanning evidence, failure metric filters, and seven Telegram-backed alarms. Sender-side HMAC signing is implemented on `main`; C2, receiver verification under C4, H4, H6, M3-M5, image/pixel validation, and finer-grained timing metrics remain open.
 
 | ID | Severity | Finding | Primary impact | Target control |
 | --- | --- | --- | --- | --- |
 | C1 | Critical | Historical: partial SQS response was not enabled; corrected 2026-07-17 | Failed documents could be deleted instead of retried | Batch size 1 and `partialResponses: true` are deployed |
 | C2 | Critical | Message controls both outbound URLs | SSRF and unintended network access | Strict scheme, host, IP, port, path, and redirect validation |
 | C3 | Critical | Historical: full presigned URLs were logged; corrected 2026-07-17 | Temporary S3 credential exposure | Deployed logs omit URLs and query strings |
-| C4 | Critical | Callback is public and unsigned | Forged inference writes and cost abuse | HMAC signature, freshness, and idempotency verification |
+| C4 | Critical | Sender signing is implemented; the public receiver does not verify it | Forged inference writes and cost abuse until verification is enforced | Receiver HMAC verification, freshness checks, replay claims, and business idempotency |
 | H1 | High | Historical: visibility was 240s for a 180s function | Premature duplicate processing during retries/throttles | 1,080-second visibility is deployed |
 | H2 | High | Historical: batch size 10 with sequential OCR | Batch timeout and broad failure blast radius | Batch size 1 is deployed |
 | H3 | High | Historical: FIFO loop continued after failure | Ordering violation after partial-response activation | Size 1 is deployed; defensive loop stops at first failure |
@@ -740,11 +741,13 @@ Target: never record either complete URL, query component, request headers, or c
 
 Status: deployed application and benchmark logs contain neither URL nor query-string indicators. Existing historical logs retain their own configured CloudWatch retention and should be handled according to the incident/data-retention policy.
 
-#### C4. Callback is public and unsigned
+#### C4. Sender signing is implemented; receiver verification remains open
 
 The callback function is configured with `url: true`. SST defaults Function URL authorization to `none`, and the deployed URL confirms `AuthType: NONE` with permissive CORS. The callback accepts a document ID from its path and a caller-supplied success payload, casts it to `OnnxTRRawInference`, and persists it.
 
-Target: preserve the URL/body contract but sign every request as specified in section 8.5. The callback must reject missing, stale, invalid, or replayed signatures before parsing or writing data.
+Sender status: the document processor on `main` signs successful and sanitized failure callbacks according to the authoritative [HMAC callback specification](hmac-callback-spec.md). The repository merge does not establish production deployment or secret-provisioning status.
+
+Receiver status: `packages/functions/src/process-document.ts` does not verify the signature, enforce freshness, or claim event IDs before parsing and writing. It must reject missing, stale, invalid, or replayed authentication before parsing or writing data and must implement business idempotency separately.
 
 ### 7.3 High findings
 
@@ -786,7 +789,7 @@ Deployed status: streaming, `Content-Length` precheck, streamed-byte enforcement
 
 Any callback failure is handled as a document failure, which will repeat download and OCR once SQS retries work. The downstream `saveInference` uses `list_append`, so repeated successful callbacks append duplicate inference records.
 
-Target: send `X-OnnxTR-Idempotency-Key` equal to the SQS message ID. The callback must retain completed keys for at least five days—the current four-day queue retention plus a safety day—and return the original acknowledgement without a second write.
+The HMAC event ID identifies an individual HTTP attempt and therefore cannot deduplicate a new attempt created by an SQS retry. Target: use a stable document/business identifier to make persistence idempotent independently of the ten-minute HMAC replay claim.
 
 #### H7. Tracebacks cross the trust boundary
 
@@ -834,7 +837,7 @@ Deployed/repository status and target: bucket linkage was removed from the separ
 
 #### Missing tests
 
-No `test`, `spec`, pytest configuration, fixtures, or package-level smoke tests existed in the reviewed baseline. The repository now has 16 Python unit/contract tests covering hierarchy serialization, confidence aggregation, model-manifest validation, global model reuse, bounded streaming cleanup, normal/benchmark handler behavior, output-digest stability, and FIFO failure identifiers. Seventeen Bun tests cover corpus selection, measurement parsing, infrastructure isolation, preflight concurrency, shared-image lookup deduplication and retry, and warm/cold scheduling. Security, representative ground-truth accuracy, Lambda Runtime Interface Emulator, and forced AWS retry tests remain open.
+No `test`, `spec`, pytest configuration, fixtures, or package-level smoke tests existed in the reviewed baseline. The repository now has 20 Python unit/contract tests covering hierarchy serialization, confidence aggregation, model-manifest validation, global model reuse, bounded streaming cleanup, normal/benchmark handler behavior, output-digest stability, FIFO failure identifiers, UUIDv7 layout, and exact-body HMAC signing. Seventeen Bun tests cover corpus selection, measurement parsing, infrastructure isolation, preflight concurrency, shared-image lookup deduplication and retry, and warm/cold scheduling. Receiver security, representative ground-truth accuracy, Lambda Runtime Interface Emulator, and forced AWS retry tests remain open.
 
 #### Observability gaps
 
@@ -1006,37 +1009,11 @@ Required flow:
 
 ### 8.5 Callback authentication and idempotency
 
-#### Required headers
+The authoritative wire format, `x-cff-*` headers, exact-byte signing construction, UUIDv7 rules, receiver verification order, replay policy, and secret-rotation procedure are defined in the [HMAC Callback Protocol and Implementation Specification](hmac-callback-spec.md).
 
-| Header | Value |
-| --- | --- |
-| `Content-Type` | `application/json` |
-| `X-OnnxTR-Timestamp` | Unix time in whole UTC seconds |
-| `X-OnnxTR-Idempotency-Key` | SQS `messageId` |
-| `X-OnnxTR-Signature` | `v1=` followed by lowercase HMAC-SHA256 hex |
+The sender serializes compact UTF-8 JSON exactly once and signs the exact bytes it passes through `requests.post(data=rawBody)`. It loads the 64-character hexadecimal `DocumentCallbackHmacSecret` through SST as the runtime value `CFF_HMAC_SECRET_HEX`, which it decodes into a 32-byte key. Missing or malformed configuration prevents callback preparation; there is no unsigned fallback.
 
-#### Canonical signature
-
-Serialize the callback payload once using UTF-8, compact JSON separators, and deterministic key order. Let the exact bytes be `body`.
-
-```text
-canonical = timestamp + "." + messageId + "." + body
-signature = HMAC-SHA256(secret, canonical)
-header = "v1=" + lowercase_hex(signature)
-```
-
-The callback must:
-
-1. Read the raw body bytes before parsing.
-2. Require all three OnnxTR headers.
-3. Reject timestamps more than 300 seconds from callback server time.
-4. Recompute the signature over the raw bytes.
-5. Compare signatures with a constant-time comparison.
-6. Claim the idempotency key atomically before writing inference data.
-7. Retain the completed key for at least five days.
-8. Return the prior successful acknowledgement for a completed replay without appending another inference.
-
-The signing secret must be stored in an SST-managed secret backed by an appropriate secret store, not a plaintext repository value or ordinary environment variable. An environment variable may contain only the secret identifier. The secret is cached in the execution environment and must support planned rotation with an overlap window.
+The receiver must authenticate the captured raw body before JSON parsing, enforce the five-minute freshness window, atomically retain delivery-attempt event IDs for ten minutes, and perform domain-level document idempotency separately. Sender signing is implemented on `main`; receiver verification is not.
 
 #### HTTP behavior
 
@@ -1118,12 +1095,12 @@ AWS base images are updated over time and require rebuilding and updating the La
 | `MAX_DOCUMENT_BYTES` | Absent | Optional; default 20 MiB; implemented |
 | `ONNXTR_RECO_BATCH_SIZE` | Implicit OnnxTR default | Optional; default 512; benchmark changes before production tuning |
 | `MAX_IMAGE_PIXELS` | Absent | Optional; default 50 million |
-| `CALLBACK_SIGNING_SECRET_ID` | Absent | Required secret reference, not secret value |
+| `CFF_HMAC_SECRET_HEX` | SST `DocumentCallbackHmacSecret` | Required 64-character hexadecimal secret value; implemented |
 | `LOG_LEVEL` | Absent | Optional; default `INFO` |
 | `POWERTOOLS_SERVICE_NAME` | Absent | `onnxtr-ocr` if Powertools is adopted |
 | `POWERTOOLS_METRICS_NAMESPACE` | Absent | `TextractTesting` if Powertools is adopted |
 
-Startup must fail with `CONFIGURATION_ERROR` when a required allowlist or secret reference is missing or empty.
+Callback preparation must fail when `CFF_HMAC_SECRET_HEX` is missing or malformed. Future required allowlists must also fail closed when missing or empty.
 
 ### 8.10 Observability
 
@@ -1366,9 +1343,9 @@ Remaining rollout sequence:
 
 1. Complete URL allowlists, DNS/IP checks, callback-path validation, and decoded image/pixel verification; redirect rejection and bounded streaming are already deployed.
 2. Extend the deployed failure metrics and alarms with stage-level download, decode, model-init, OCR, callback, total-duration, byte, page, and cold-start metrics without logging URLs, object identifiers, OCR content, or callback payloads.
-3. Add callback signature verification in report-only mode and record invalid/missing signatures without rejecting existing traffic.
-4. Deploy OCR callback signing only after report-only verification confirms exact-body canonicalization.
-5. Make callback verification mandatory and enable idempotent persistence.
+3. Deploy receiver verification in report-only mode and validate captured raw-body computations in a non-production stage. Report-only traffic must not be treated as authenticated for security-sensitive side effects.
+4. Provision stage-specific callback secrets and deploy the already-merged sender signing implementation; a repository merge alone is not deployment evidence.
+5. Make receiver verification, freshness checks, and replay claims mandatory, then enable domain-idempotent persistence.
 6. Run forced success, terminal failure, retry, and DLQ tests in an isolated stage. Never submit benchmark or forced-failure traffic to the production FIFO queue.
 7. Add representative ground-truth accuracy, security, container/RIE, and vulnerability-scanning gates.
 8. Deploy each remaining production change during a low-traffic window and monitor errors, callback failures, duration, memory, queue age, retries, and DLQ for at least 24 hours.
