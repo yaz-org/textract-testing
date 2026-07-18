@@ -155,9 +155,27 @@ The isolated SST application was then removed as a complete application on 2026-
 
 The production subscriber's sanitized image fingerprint remained `f3cac534272996e7ccd49b3a`. Its revision, last-modified value, x86-64/2,048 MB/180-second/512 MB execution envelope, event-source UUID and source/function identities, batch size one, zero batching window, `ReportBatchItemFailures`, 1,080-second visibility timeout, five-receive redrive policy, and FIFO queue identities were byte-for-byte equal in the private before/after comparison. No production traffic occurred during the immediate cleanup window.
 
-The benchmark winner was not promoted. Production remains at 2,048 MB on its pre-benchmark image.
+At cleanup time, the benchmark winner had not been promoted and production remained at 2,048 MB on its pre-benchmark image. A separately reviewed promotion on 2026-07-18 is recorded below.
 
 The requested one-hour and 24-hour observations are time-gated. This report records the immediate evidence available on 2026-07-17; later checks must be appended after their windows. If no additional production traffic occurs, the operational result must be labeled **insufficient traffic**, not pass.
+
+## Production promotion — 2026-07-18
+
+The recommended **precompiled 3,008 MB** configuration was promoted to the FIFO production subscriber in a separate change. The benchmark queue prohibition remained intact: no benchmark or forced-failure message was submitted to production, and the retained benchmark harness continues to use temporary direct-invocation Lambdas only.
+
+Immediate sanitized verification found:
+
+- Lambda Active with a successful update status, x86-64 architecture, 3,008 MB memory, 180-second timeout, and 512 MB ephemeral storage.
+- The deployed image marker reported `precompiled`; the image contained compiled dependencies and handler bytecode plus the baked model manifest.
+- The deployed Linux/x86-64 ECR image scan completed with zero critical and zero high findings.
+- The FIFO event-source mapping remained Enabled with batch size one, zero batching window, and `ReportBatchItemFailures`; its configuration timestamp did not change during promotion.
+- Queue visibility remained 1,080 seconds and redrive remained five receives. The source queue and DLQ were empty.
+- Seven CloudWatch alarms were enabled for Lambda errors, throttles, p99 duration, queue age, DLQ depth, document failures, and failure-callback failures.
+- Alarm notifications use an encrypted SNS topic and the existing production Telegram channel. Controlled `ALARM` and `OK` notifications were delivered successfully.
+- The subscriber log group has metric filters for `document_failed` and `failure_callback_failed`.
+- No Lambda errors or throttles were observed in the immediate promotion window.
+
+No natural subscriber invocation had occurred by the immediate check, so first-use duration, memory, OCR success, and callback completion remain **insufficient traffic** rather than passed. The one-hour and 24-hour observations must be appended after their respective windows.
 
 ## Reproduction sources
 

@@ -90,17 +90,18 @@ The following subset was deployed and verified in production on 2026-07-17 witho
 
 Verification completed for this repository state:
 
-- All 16 Python package tests and 17 Bun benchmark tests pass.
+- All 16 Python package tests, 25 Bun benchmark/infrastructure tests, and 6 Telegram alarm notifier tests pass.
 - The final x86-64 image builds successfully and imports the handler.
 - A network-disabled container initializes the locally baked predictor in approximately 2.3 seconds in local Docker and completes an OCR smoke test. This is evidence that runtime model download is unnecessary, not an AWS Lambda performance benchmark.
 - The built image contains two model files totaling 197,506,608 bytes and is approximately 547 MB locally. ECR compressed size and Lambda runtime measurements can differ.
 - Targeted TypeScript checks pass for the queue, benchmark infrastructure, and benchmark harness.
-- The deployed subscriber is active at 2,048 MB with batch size one, `ReportBatchItemFailures`, 1,080-second visibility, and five receives before DLQ.
+- The deployed subscriber is active at 3,008 MB with precompiled bytecode, batch size one, `ReportBatchItemFailures`, 1,080-second visibility, and five receives before DLQ.
 - Three post-deployment documents and callbacks completed successfully before benchmarking; the first observed cold document was approximately 100.9 seconds and two warm documents were approximately 8.5 and 8.9 seconds.
-- A 390-invocation, direct-only benchmark completed with zero errors, timeouts, callbacks, or output mismatches. Precompiled bytecode at 3,008 MB was the recommendation, not an automatic production change.
+- A 390-invocation, direct-only benchmark completed with zero errors, timeouts, callbacks, or output mismatches. Its precompiled 3,008 MB recommendation was promoted in a separately reviewed production change on 2026-07-18.
 - The isolated benchmark application was removed afterward; zero temporary functions, log groups, roles, event-source mappings, or Function URLs remain.
+- Seven encrypted CloudWatch alarms notify the existing production Telegram channel. Controlled `ALARM` and `OK` transitions were delivered successfully, and the subscriber log group has metric filters for `document_failed` and `failure_callback_failed`.
 
-These controls remain open: URL host/IP validation, image byte and pixel validation, callback signing and idempotency, stable retry/terminal error codes, custom metrics and alarms, and production-artifact vulnerability evidence. Ground-truth OCR accuracy evaluation also remains separate from the completed output-equivalence benchmark.
+These controls remain open: URL host/IP validation, image byte and pixel validation, callback signing and idempotency, stable retry/terminal error codes, and broader stage-level timing metrics. Ground-truth OCR accuracy evaluation also remains separate from the completed output-equivalence benchmark.
 
 ## 2. Purpose and scope
 
@@ -285,10 +286,10 @@ At cold invocation, the handler validates the manifest structure and local file 
 | Aspect ratio | Preserved | `preserve_aspect_ratio=True` | Avoids phone screenshot distortion |
 | Orientation | Disabled | Page and crop classifiers disabled | Faster, but rotated inputs are unsupported |
 | Detection batch | 1 | `det_bs=1` | Matches one-document inference |
-| Lambda memory | 2,048 MB | 2,048 MB | Provides slightly more than one vCPU allocation |
+| Lambda memory | 3,008 MB | 3,008 MB | Promoted benchmark winner; Lambda allocates proportionally more CPU than the former 2,048 MB setting |
 | Subscriber timeout | 180 seconds | 180 seconds | Applies to the complete SQS batch |
 | Ephemeral storage | Not explicitly set | 512 MB default | Shared by source file and warm `/tmp` content |
-| Image size | Not constrained | Approximately 517 MiB in ECR | Large but valid for Lambda container deployment |
+| Image size | Not constrained | Approximately 544.78 MiB compressed in ECR | Precompiled bytecode adds size but remains within Lambda container limits |
 
 AWS requires Lambda container images to operate with a read-only root filesystem and provides writable `/tmp` storage from 512 MB to 10,240 MB. See [AWS container image requirements](https://docs.aws.amazon.com/lambda/latest/dg/images-create.html).
 
@@ -586,7 +587,7 @@ An empty list means the invocation processed every record successfully. A popula
 
 ## 6. Sanitized production snapshot
 
-Snapshot date: **2026-07-17**.
+Snapshot dates: **2026-07-17 through 2026-07-18**.
 
 ### 6.1 Deployed configuration
 
@@ -594,7 +595,7 @@ Snapshot date: **2026-07-17**.
 | --- | --- |
 | Subscriber deployment | Lambda container image |
 | Architecture | x86-64 |
-| Memory | 2,048 MB |
+| Memory | 3,008 MB; promoted 2026-07-18 |
 | Timeout | 180 seconds |
 | Ephemeral storage | 512 MB |
 | Lambda state | Active; last update successful |
@@ -608,8 +609,8 @@ Snapshot date: **2026-07-17**.
 | DLQ max receive count | 5 |
 | Source queue depth | 0 visible, 0 in flight, 0 delayed at inspection |
 | DLQ depth | 0 visible, 0 in flight, 0 delayed at inspection |
-| ECR image size | 542,264,619 bytes, approximately 517 MiB |
-| ECR scan summary | Current production digest scan summary unavailable; temporary benchmark images completed scans with no reported severity counts |
+| ECR image size | 571,246,344 bytes, approximately 544.78 MiB |
+| ECR scan summary | Complete; zero critical and zero high findings for the deployed Linux/x86-64 image |
 | Separate direct function | Container image; inactive at inspection |
 | Callback Function URL | `AuthType: NONE`, buffered, permissive CORS |
 
@@ -670,7 +671,11 @@ Precompiled bytecode at 3,008 MB was recommended:
 | Warm p95 | 13.399 s | 5.885 s | -56.1% |
 | Median billed GB-seconds | 21.812 | 14.118 | -35.3% |
 
-The recommendation was not promoted. Production remained on the pre-benchmark 2,048 MB image. After validating a parallel preflight-only path with zero Lambda `START` records, the isolated application was removed. Post-removal verification found zero temporary functions, log groups, roles, event-source mappings, or Function URLs. The production image fingerprint, revision, execution envelope, event-source identity/configuration, and FIFO queue configuration matched the private pre-removal baseline exactly; source and DLQ depths, errors, and throttles remained zero.
+The benchmark application did not promote the recommendation. After validating a parallel preflight-only path with zero Lambda `START` records, the isolated application was removed. Post-removal verification found zero temporary functions, log groups, roles, event-source mappings, or Function URLs. At that cleanup boundary, the production image fingerprint, revision, execution envelope, event-source identity/configuration, and FIFO queue configuration matched the private pre-removal baseline exactly; source and DLQ depths, errors, and throttles remained zero.
+
+On 2026-07-18, a separate production promotion changed only the subscriber image and memory configuration to precompiled bytecode at 3,008 MB. Read-only verification found the function Active with a successful update status, x86-64 architecture, 180-second timeout, 512 MB ephemeral storage, 3,723 dependency `.pyc` files, the compiled handler, and the baked model manifest. The deployed ECR image scan completed with zero critical and zero high findings. The FIFO event-source mapping retained batch size one, zero batching window, and `ReportBatchItemFailures`; visibility remained 1,080 seconds and redrive remained five receives. The source queue and DLQ were empty, with zero Lambda errors and throttles in the immediate window. Because no natural production invocation had occurred yet, traffic-dependent performance and callback acceptance are pending rather than passed.
+
+The same release added seven CloudWatch alarms for Lambda errors, throttles, p99 duration, queue age, DLQ depth, document failures, and failure-callback failures. Notifications use an encrypted SNS topic and the existing Telegram channel; controlled `ALARM` and recovery notifications were delivered. URLs, OCR text, payloads, account identifiers, and physical resource identifiers are excluded from notifier messages.
 
 The one-hour and 24-hour operational observations are time-gated. If no production traffic occurs in either window, the traffic-dependent result must be labeled **insufficient traffic**, while configuration equality remains valid evidence.
 
@@ -678,7 +683,7 @@ The one-hour and 24-hour operational observations are time-gated. If no producti
 
 ### 7.1 Summary
 
-Severity records the impact at discovery. Deployment on 2026-07-17 closed C1, C3, H1-H3, the byte-streaming portion of H5, H7-H10, L1-L4, and part of M1/M2; C1 still lacks an intentionally forced production retry test. C2, C4, H4, H6, M3-M5, image/pixel validation, callback authentication/idempotency, and the full observability target remain open.
+Severity records the impact at discovery. Deployment on 2026-07-17 closed C1, C3, H1-H3, the byte-streaming portion of H5, H7-H10, L1-L4, and part of M1/M2; C1 still lacks an intentionally forced production retry test. The 2026-07-18 promotion added the benchmark-selected memory/bytecode configuration, production image scanning evidence, failure metric filters, and seven Telegram-backed alarms. C2, C4, H4, H6, M3-M5, image/pixel validation, callback authentication/idempotency, and finer-grained timing metrics remain open.
 
 | ID | Severity | Finding | Primary impact | Target control |
 | --- | --- | --- | --- | --- |
@@ -861,7 +866,7 @@ Deployed status: build logs report only model count and total bytes; runtime log
 - Download and callback requests have non-infinite socket timeouts.
 - OCR output retains geometry, word confidence, objectness, page dimensions, and model identity.
 - The container uses a multi-stage build and does not copy compiler packages into the final stage.
-- Average observed maximum memory was well below 2,048 MB, although the observed peak leaves materially less headroom.
+- Historical production and controlled benchmark peaks remained below the promoted 3,008 MB allocation; the benchmark maximum was approximately 1,467 MB.
 - A FIFO source queue and DLQ already exist.
 
 ## 8. Production-hardened target
@@ -897,7 +902,7 @@ documentQueue.subscribe(
     runtime: "python3.13",
     python: { container: true },
     timeout: "3 minutes",
-    memory: "2048 MB",
+    memory: "3008 MB",
     // environment omitted
   },
   {
@@ -1342,11 +1347,11 @@ The completed protocol used:
 
 All six variants passed the original acceptance thresholds. The winning precompiled 3,008 MB variant produced controlled-cold p95 12.346 seconds, warm p95 5.885 seconds, maximum warm time 5.988 seconds, maximum observed memory 1,465 MB, and median billed 14.118 GB-seconds. Full sanitized results and cold-start caveats are in the [benchmark report](benchmarks/onnxtr-lambda-2026-07-17.md).
 
-This result proves structural output equivalence for the selected fixtures, not ground-truth OCR accuracy. Configuration updates create new execution environments but do not guarantee an uncached regional image pull. Production promotion requires a separate reviewed deployment and first-use monitoring; the benchmark task intentionally made no production image or memory change.
+This result proves structural output equivalence for the selected fixtures, not ground-truth OCR accuracy. Configuration updates create new execution environments but do not guarantee an uncached regional image pull. The benchmark task itself made no production image or memory change; its winning configuration was promoted separately on 2026-07-18 and remains subject to first-use and 24-hour production observation.
 
 ## 11. Rollout plan
 
-The first reliability and optimization release is deployed: URL/payload redaction, bounded streaming, local model paths, Python/lock alignment, batch size one, partial responses, 1,080-second visibility, and five-receive redrive were verified in production. The isolated six-way direct-invocation benchmark was completed and removed without promoting its recommendation. Remaining controls require separately reviewed changes and must preserve the message body.
+The reliability and optimization releases are deployed: URL/payload redaction, bounded streaming, local model paths, Python/lock alignment, batch size one, partial responses, 1,080-second visibility, five-receive redrive, precompiled bytecode at 3,008 MB, image scanning, and Telegram-backed alarms were verified in production. The isolated six-way direct-invocation benchmark was completed and removed before its recommendation was promoted through a separate reviewed change. Remaining controls require separately reviewed changes and must preserve the message body.
 
 Completed release and benchmark gates:
 
@@ -1360,7 +1365,7 @@ Completed release and benchmark gates:
 Remaining rollout sequence:
 
 1. Complete URL allowlists, DNS/IP checks, callback-path validation, and decoded image/pixel verification; redirect rejection and bounded streaming are already deployed.
-2. Add structured timing/failure metrics and alarms without logging URLs, object identifiers, OCR content, or callback payloads.
+2. Extend the deployed failure metrics and alarms with stage-level download, decode, model-init, OCR, callback, total-duration, byte, page, and cold-start metrics without logging URLs, object identifiers, OCR content, or callback payloads.
 3. Add callback signature verification in report-only mode and record invalid/missing signatures without rejecting existing traffic.
 4. Deploy OCR callback signing only after report-only verification confirms exact-body canonicalization.
 5. Make callback verification mandatory and enable idempotent persistence.
@@ -1490,7 +1495,7 @@ These links already appear in [`README.md`](../README.md):
 
 ## 14. Decisions and assumptions
 
-- This document describes production, the completed direct benchmark, and benchmark cleanup as observed on 2026-07-17.
+- This document describes production, the completed direct benchmark and cleanup, and the separately promoted benchmark winner as observed through 2026-07-18.
 - The optimization/reliability subset in section 1.4 was deployed before closeout. The benchmark used temporary isolated resources and direct invocation; cleanup removed those resources without mutating or invoking the production subscriber.
 - Future hardening retains the required `downloadUrl` and `callbackUrl` body fields.
 - Security hardening may add callback headers and environment configuration without adding required body fields.
@@ -1504,5 +1509,5 @@ These links already appear in [`README.md`](../README.md):
 - Python 3.13 is authoritative because it is the current production image interpreter.
 - `db_resnet50` and `parseq` remain the model architectures until a separate quality/performance evaluation approves a change.
 - Production evidence is aggregate and sanitized.
-- The 390-sample results are controlled direct-invocation benchmark evidence, not a production promotion or a guarantee for other corpora.
+- The 390-sample results are controlled direct-invocation benchmark evidence that informed the 2026-07-18 production promotion; they are not a guarantee for other corpora.
 - The HMAC callback control is a compatibility measure; IAM-authenticated service-to-service communication remains the preferred longer-term direction.

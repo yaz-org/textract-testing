@@ -1,7 +1,9 @@
 {
   "name": "@textract-testing/functions",
   "type": "module",
-  "scripts": {},
+  "scripts": {
+    "test:onnxtr-alarm-notifier": "bun test src/onnxtr-alarm-notifier.test.ts"
+  },
   "dependencies": {
     "@aws-sdk/client-dynamodb": "*",
     "@aws-sdk/client-sqs": "*",

@@ -7,8 +7,8 @@ const vpnConfig = new sst.Secret("ProtonVpnConfig");
 const vpnUsername = new sst.Secret("ProtonVpnUsername");
 const vpnPassword = new sst.Secret("ProtonVpnPassword");
 const webPageCredentials = new sst.Secret("WebPageCredentials");
-const telegramBotToken = new sst.Secret("TelegramBotToken");
-const telegramChatId = new sst.Secret("TelegramChatId");
+export const telegramBotToken = new sst.Secret("TelegramBotToken");
+export const telegramChatId = new sst.Secret("TelegramChatId");
 
 const configBucket = new aws.s3.Bucket("VpnConfigBucket", {
   forceDestroy: true,

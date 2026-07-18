@@ -28,6 +28,9 @@ class Resource:
     class HashLockTable:
         name: str
         type: str
+    class OnnxTRAlertTopic:
+        arn: str
+        type: str
     class OnnxTRFunction:
         name: str
         type: str

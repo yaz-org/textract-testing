@@ -34,6 +34,10 @@ declare module "sst" {
       "name": string
       "type": "sst.aws.Dynamo"
     }
+    "OnnxTRAlertTopic": {
+      "arn": string
+      "type": "sst.aws.SnsTopic"
+    }
     "OnnxTRFunction": {
       "name": string
       "type": "sst.aws.Function"
