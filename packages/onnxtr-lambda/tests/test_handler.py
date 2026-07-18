@@ -6,6 +6,7 @@ import sys
 import tempfile
 import unittest
 import uuid
+from contextlib import ExitStack
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
@@ -335,10 +336,179 @@ class HandlerContractTests(unittest.TestCase):
 
     def test_successful_direct_invoke_uses_sqs_shaped_event(self):
         event = {"Records": [{"messageId": "benchmark-1", "body": "{}"}]}
-        with patch.object(handler, "_process_record") as process_record:
+        with patch.object(handler, "_process_record", return_value=None) as process_record:
             response = handler.lambda_handler(event, SimpleNamespace(aws_request_id="request-1"))
         self.assertEqual(response, {"batchItemFailures": []})
         process_record.assert_called_once()
+
+    def test_normal_mode_posts_success_callback(self):
+        response, callback, path = self._run_successful_record(benchmark_mode=False)
+        self.assertEqual(response, {"batchItemFailures": []})
+        callback.assert_called_once()
+        self.assertFalse(path.exists())
+
+    def test_benchmark_mode_skips_success_callback_and_returns_safe_summary(self):
+        response, callback, path = self._run_successful_record(benchmark_mode=True)
+        callback.assert_not_called()
+        self.assertFalse(path.exists())
+        self.assertEqual(response["batchItemFailures"], [])
+        self.assertEqual(
+            set(response["benchmark"]),
+            {
+                "downloadMs",
+                "decodeMs",
+                "modelInitMs",
+                "ocrMs",
+                "serializationMs",
+                "totalProcessingMs",
+                "documentBytes",
+                "pageCount",
+                "wordCount",
+                "averageConfidence",
+                "outputDigest",
+            },
+        )
+        serialized = json.dumps(response)
+        self.assertNotIn("hello", serialized)
+        self.assertNotIn("downloadUrl", serialized)
+        self.assertNotIn("callbackUrl", serialized)
+        self.assertEqual(len(response["benchmark"]["outputDigest"]), 64)
+
+    def test_benchmark_mode_skips_failure_callback(self):
+        record = {
+            "messageId": "benchmark-failure",
+            "body": json.dumps(
+                {
+                    "downloadUrl": "https://download.invalid/document",
+                    "callbackUrl": "https://benchmark.invalid/callback",
+                }
+            ),
+        }
+        with (
+            patch.object(handler, "_BENCHMARK_MODE_ENABLED", True),
+            patch.object(handler, "_process_record", side_effect=RuntimeError("failed")),
+            patch.object(handler, "_post_callback") as callback,
+            patch.object(handler, "_log"),
+        ):
+            response = handler.lambda_handler(
+                {"Records": [record]}, SimpleNamespace(aws_request_id="request-1")
+            )
+        self.assertEqual(
+            response,
+            {"batchItemFailures": [{"itemIdentifier": "benchmark-failure"}]},
+        )
+        callback.assert_not_called()
+
+    def test_benchmark_environment_requires_message_prefix(self):
+        record = {
+            "messageId": "production-message",
+            "body": json.dumps(
+                {
+                    "downloadUrl": "https://download.invalid/document",
+                    "callbackUrl": "https://callback.invalid/document",
+                }
+            ),
+        }
+        with (
+            patch.object(handler, "_BENCHMARK_MODE_ENABLED", True),
+            patch.object(handler, "_process_record", side_effect=RuntimeError("failed")),
+            patch.object(handler, "_post_callback") as callback,
+            patch.object(handler, "_log"),
+        ):
+            response = handler.lambda_handler(
+                {"Records": [record]}, SimpleNamespace(aws_request_id="request-1")
+            )
+        self.assertEqual(
+            response,
+            {"batchItemFailures": [{"itemIdentifier": "production-message"}]},
+        )
+        callback.assert_called_once()
+
+    def test_multiple_benchmark_records_are_rejected(self):
+        records = [
+            {"messageId": "benchmark-one", "body": "{}"},
+            {"messageId": "benchmark-two", "body": "{}"},
+        ]
+        with patch.object(handler, "_BENCHMARK_MODE_ENABLED", True):
+            with self.assertRaisesRegex(ValueError, "exactly one"):
+                handler.lambda_handler({"Records": records}, None)
+
+    def test_output_digest_is_stable_and_ignores_non_output_fields(self):
+        pages = [{"text": "hello", "blocks": []}]
+        model_info = {"detArch": "db_resnet50", "recoArch": "parseq"}
+        first = handler._output_digest(pages, "hello", 0.9, model_info)
+        second = handler._output_digest(pages, "hello", 0.9, model_info)
+        self.assertEqual(first, second)
+        self.assertNotEqual(first, handler._output_digest(pages, "changed", 0.9, model_info))
+
+    def _run_successful_record(self, *, benchmark_mode: bool):
+        result = SimpleNamespace(
+            pages=[
+                SimpleNamespace(
+                    page_idx=0,
+                    dimensions=(10, 20),
+                    orientation={"value": None, "confidence": None},
+                    language={"value": None, "confidence": None},
+                    blocks=[
+                        SimpleNamespace(
+                            lines=[
+                                SimpleNamespace(
+                                    words=[
+                                        SimpleNamespace(
+                                            value="hello",
+                                            confidence=0.9,
+                                            geometry=((0.0, 0.0), (1.0, 1.0)),
+                                            objectness_score=0.8,
+                                            crop_orientation={
+                                                "value": None,
+                                                "confidence": None,
+                                            },
+                                        )
+                                    ],
+                                    geometry=((0.0, 0.0), (1.0, 1.0)),
+                                    objectness_score=0.8,
+                                )
+                            ],
+                            artefacts=[],
+                            geometry=((0.0, 0.0), (1.0, 1.0)),
+                            objectness_score=0.8,
+                        )
+                    ],
+                )
+            ]
+        )
+        model = Mock(return_value=result)
+        document_file = SimpleNamespace(from_images=Mock(return_value=object()))
+        onnxtr_io = SimpleNamespace(DocumentFile=document_file)
+        record = {
+            "messageId": "benchmark-success" if benchmark_mode else "production-success",
+            "body": json.dumps(
+                {
+                    "downloadUrl": "https://download.invalid/document",
+                    "callbackUrl": "https://benchmark.invalid/callback",
+                }
+            ),
+        }
+        temporary = tempfile.NamedTemporaryFile(delete=False)
+        temporary.write(b"image")
+        temporary.close()
+        path = Path(temporary.name)
+        callback = Mock()
+
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(handler, "_BENCHMARK_MODE_ENABLED", benchmark_mode))
+            stack.enter_context(
+                patch.object(handler, "_download_document", return_value=(path, 5))
+            )
+            stack.enter_context(patch.object(handler, "get_model", return_value=model))
+            stack.enter_context(patch.object(handler, "_post_callback", callback))
+            stack.enter_context(patch.object(handler, "_log"))
+            stack.enter_context(patch.dict(sys.modules, {"onnxtr.io": onnxtr_io}))
+            response = handler.lambda_handler(
+                {"Records": [record]}, SimpleNamespace(aws_request_id="request-1")
+            )
+
+        return response, callback, path
 
     def test_fifo_batch_stops_after_first_failure_and_returns_unprocessed_ids(self):
         records = [

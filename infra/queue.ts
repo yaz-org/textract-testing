@@ -2,7 +2,7 @@ import { onnxtrFunction } from "./onnxtr";
 import { processDocumentFn } from "./callback";
 import { documentCallbackHmacSecret } from "./callback-signing";
 
-const dlq = new sst.aws.Queue("DocumentDLQ", { fifo: true });
+export const documentDlq = new sst.aws.Queue("DocumentDLQ", { fifo: true });
 
 export const documentQueue = new sst.aws.Queue("DocumentQueue", {
   fifo: {
@@ -10,18 +10,18 @@ export const documentQueue = new sst.aws.Queue("DocumentQueue", {
   },
   visibilityTimeout: "18 minutes",
   dlq: {
-    queue: dlq.arn,
+    queue: documentDlq.arn,
     retry: 5,
   },
 });
 
-documentQueue.subscribe(
+export const onnxtrSubscriber = documentQueue.subscribe(
   {
     handler: "packages/onnxtr-lambda/handler.lambda_handler",
     runtime: "python3.13",
     python: { container: true },
     timeout: "3 minutes",
-    memory: "2048 MB",
+    memory: "3008 MB",
     environment: {
       ONNXTR_CACHE_DIR: "/opt/onnxtr_cache",
       ONNXTR_MODEL_MANIFEST: "/opt/onnxtr_cache/model-manifest.json",

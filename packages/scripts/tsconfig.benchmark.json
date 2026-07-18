@@ -1,0 +1,10 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "types": ["node"]
+  },
+  "include": [
+    "src/onnxtr-benchmark.ts",
+    "src/onnxtr-benchmark-lib.ts"
+  ]
+}

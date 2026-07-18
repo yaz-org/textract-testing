@@ -3,13 +3,18 @@
   "version": "0.0.0",
   "type": "module",
   "dependencies": {
+    "@aws-sdk/client-ecr": "^3",
     "@aws-sdk/client-lambda": "^3",
     "@aws-sdk/client-s3": "^3",
+    "@aws-sdk/s3-request-presigner": "^3",
     "@textract-testing/core": "*",
     "sst": "*"
   },
   "scripts": {
-    "onnxtr-benchmark": "sst shell tsx src/onnxtr-benchmark.ts",
+    "onnxtr-benchmark": "SST_STAGE=production sst shell --config ../../sst.onnxtr-benchmark.config.ts --stage production tsx src/onnxtr-benchmark.ts",
+    "onnxtr-benchmark:preflight": "ONNXTR_BENCHMARK_PREFLIGHT_ONLY=TRUE SST_STAGE=production sst shell --config ../../sst.onnxtr-benchmark.config.ts --stage production tsx src/onnxtr-benchmark.ts",
+    "test:onnxtr-benchmark": "bun test src/onnxtr-benchmark-lib.test.ts src/onnxtr-benchmark-infra.test.ts src/onnxtr-benchmark-harness.test.ts src/onnxtr-promotion-infra.test.ts",
+    "typecheck:onnxtr-benchmark": "tsc --noEmit -p tsconfig.benchmark.json",
     "onnxtr-extract": "sst shell --stage production tsx src/onnxtr-extract.ts",
     "shell": "sst shell tsx"
   },
