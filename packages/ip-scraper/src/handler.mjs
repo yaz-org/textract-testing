@@ -6,6 +6,7 @@ import chromium from "@sparticuz/chromium";
 import puppeteer from "puppeteer-extra";
 import StealthPlugin from "puppeteer-extra-plugin-stealth";
 import TelegramBot from "node-telegram-bot-api";
+import { prepareSignedCallback } from "./callback-signing.mjs";
 
 puppeteer.use(StealthPlugin());
 
@@ -729,15 +730,18 @@ export const handler = async (event) => {
 
           if (statementsResult?.success && event.callbackUrl) {
             try {
-              const callbackBody = JSON.stringify({
+              const callbackPayload = {
                 success: true,
                 profileName,
                 transactions: statementsResult.transactions,
                 transactionsCount: statementsResult.transactions.length,
-              });
+              };
+              const { body: callbackBody, headers } = prepareSignedCallback(
+                callbackPayload,
+              );
               const resp = await fetch(event.callbackUrl, {
                 method: "POST",
-                headers: { "Content-Type": "application/json" },
+                headers,
                 body: callbackBody,
               });
               console.log(`[callback] Posted to ${event.callbackUrl} (${resp.status})`);

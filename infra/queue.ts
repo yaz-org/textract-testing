@@ -1,5 +1,6 @@
 import { onnxtrFunction } from "./onnxtr";
 import { processDocumentFn } from "./callback";
+import { documentCallbackHmacSecret } from "./callback-signing";
 
 export const documentDlq = new sst.aws.Queue("DocumentDLQ", { fifo: true });
 
@@ -25,6 +26,7 @@ export const onnxtrSubscriber = documentQueue.subscribe(
       ONNXTR_CACHE_DIR: "/opt/onnxtr_cache",
       ONNXTR_MODEL_MANIFEST: "/opt/onnxtr_cache/model-manifest.json",
       ONNXTR_MULTIPROCESSING_DISABLE: "TRUE",
+      CFF_HMAC_SECRET_HEX: documentCallbackHmacSecret.value,
     },
   },
   {

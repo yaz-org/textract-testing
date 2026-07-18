@@ -1,7 +1,11 @@
+import hashlib
+import hmac
 import json
+import os
 import sys
 import tempfile
 import unittest
+import uuid
 from contextlib import ExitStack
 from pathlib import Path
 from types import SimpleNamespace
@@ -204,6 +208,123 @@ class DownloadTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "MAX_DOCUMENT_BYTES"):
                 handler._download_document("https://example.invalid/document")
         self.assertFalse(partial_path.exists())
+
+
+class CallbackSigningTests(unittest.TestCase):
+    SECRET_HEX = "11" * 32
+
+    def test_uuid7_has_expected_timestamp_version_and_variant(self):
+        timestamp_ms = 1_784_320_000_123
+        event_id = handler._uuid7(timestamp_ms, bytes(range(10)))
+
+        self.assertEqual(event_id.version, 7)
+        self.assertEqual(event_id.variant, uuid.RFC_4122)
+        self.assertEqual(int.from_bytes(event_id.bytes[:6], "big"), timestamp_ms)
+
+    def test_post_callback_signs_the_exact_utf8_body_sent(self):
+        session = Mock()
+        session.post.return_value = FakeResponse()
+        payload = {"message": "Línea \"uno\"\nsegunda\\línea", "success": True}
+        timestamp = 1_784_320_000
+        event_id = uuid.UUID("018f47a2-4d6b-7c8d-9e0f-123456789abc")
+
+        with (
+            patch.object(handler, "_http_session", session),
+            patch.dict(os.environ, {"CFF_HMAC_SECRET_HEX": self.SECRET_HEX}),
+            patch.object(handler.time, "time", return_value=timestamp),
+            patch.object(handler, "_uuid7", return_value=event_id),
+        ):
+            handler._post_callback(
+                "https://callback.invalid/document",
+                payload,
+                handler._CALLBACK_TIMEOUT,
+            )
+
+        session.post.assert_called_once()
+        args, kwargs = session.post.call_args
+        self.assertEqual(args, ("https://callback.invalid/document",))
+        self.assertNotIn("json", kwargs)
+        self.assertIsInstance(kwargs["data"], bytes)
+        self.assertEqual(
+            kwargs["data"],
+            json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode(
+                "utf-8"
+            ),
+        )
+        self.assertEqual(
+            kwargs["headers"],
+            {
+                "Content-Type": "application/json",
+                "x-cff-timestamp": str(timestamp),
+                "x-cff-event-id": str(event_id),
+                "x-cff-signature": kwargs["headers"]["x-cff-signature"],
+            },
+        )
+
+        signing_input = (
+            f"{timestamp}.{event_id}.".encode("ascii") + kwargs["data"]
+        )
+        expected_signature = hmac.new(
+            bytes.fromhex(self.SECRET_HEX),
+            signing_input,
+            hashlib.sha256,
+        ).hexdigest()
+        self.assertEqual(
+            kwargs["headers"]["x-cff-signature"],
+            f"v1={expected_signature}",
+        )
+        self.assertRegex(expected_signature, r"^[0-9a-f]{64}$")
+
+    def test_invalid_secrets_do_not_send_a_callback(self):
+        invalid_values = (None, "", "ab" * 31, "ab" * 33, "z" * 64)
+        for secret_hex in invalid_values:
+            with self.subTest(secret_hex=secret_hex):
+                session = Mock()
+                environment = (
+                    {} if secret_hex is None else {"CFF_HMAC_SECRET_HEX": secret_hex}
+                )
+                with (
+                    patch.object(handler, "_http_session", session),
+                    patch.dict(os.environ, environment, clear=True),
+                ):
+                    with self.assertRaisesRegex(RuntimeError, "CFF_HMAC_SECRET_HEX"):
+                        handler._post_callback(
+                            "https://callback.invalid/document",
+                            {"success": False},
+                            handler._FAILURE_CALLBACK_TIMEOUT,
+                        )
+                session.post.assert_not_called()
+
+    def test_failure_path_uses_the_signed_callback_sender(self):
+        record = {
+            "messageId": "failed-document",
+            "body": json.dumps(
+                {
+                    "downloadUrl": "https://download.invalid/document",
+                    "callbackUrl": "https://callback.invalid/document",
+                }
+            ),
+        }
+        session = Mock()
+        session.post.return_value = FakeResponse()
+        with (
+            patch.object(handler, "_http_session", session),
+            patch.dict(os.environ, {"CFF_HMAC_SECRET_HEX": self.SECRET_HEX}),
+            patch.object(handler, "_process_record", side_effect=RuntimeError("failed")),
+            patch.object(handler, "_log"),
+        ):
+            response = handler.lambda_handler({"Records": [record]}, None)
+
+        self.assertEqual(
+            response,
+            {"batchItemFailures": [{"itemIdentifier": "failed-document"}]},
+        )
+        session.post.assert_called_once()
+        self.assertEqual(
+            json.loads(session.post.call_args.kwargs["data"]),
+            {"success": False, "error": "Document processing failed."},
+        )
+        self.assertIn("x-cff-signature", session.post.call_args.kwargs["headers"])
 
 
 class HandlerContractTests(unittest.TestCase):

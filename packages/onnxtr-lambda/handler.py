@@ -1,6 +1,9 @@
 import hashlib
+import hmac
 import json
 import os
+import re
+import secrets
 import time
 import uuid
 from datetime import datetime, timezone
@@ -23,6 +26,7 @@ _DOWNLOAD_TIMEOUT = (5, 120)
 _CALLBACK_TIMEOUT = (5, 30)
 _FAILURE_CALLBACK_TIMEOUT = (5, 10)
 _DOWNLOAD_CHUNK_BYTES = 1024 * 1024
+_HMAC_SECRET_PATTERN = re.compile(r"[0-9a-fA-F]{64}")
 _BENCHMARK_MODE_ENABLED = os.getenv("ONNXTR_BENCHMARK_MODE") == "TRUE"
 
 _model = None
@@ -236,13 +240,62 @@ def _download_document(download_url: str) -> tuple[Path, int]:
     return tmp_path, document_bytes
 
 
+def _callback_secret() -> bytes:
+    secret_hex = os.getenv("CFF_HMAC_SECRET_HEX")
+    if secret_hex is None or _HMAC_SECRET_PATTERN.fullmatch(secret_hex) is None:
+        raise RuntimeError(
+            "CFF_HMAC_SECRET_HEX must contain exactly 32 bytes as hexadecimal"
+        )
+    return bytes.fromhex(secret_hex)
+
+
+def _uuid7(
+    timestamp_ms: int | None = None,
+    random_bytes: bytes | None = None,
+) -> uuid.UUID:
+    timestamp_ms = time.time_ns() // 1_000_000 if timestamp_ms is None else timestamp_ms
+    if not 0 <= timestamp_ms < 1 << 48:
+        raise ValueError("UUIDv7 timestamp is outside the 48-bit range")
+
+    random_bytes = secrets.token_bytes(10) if random_bytes is None else random_bytes
+    if len(random_bytes) != 10:
+        raise ValueError("UUIDv7 requires exactly 10 random bytes")
+
+    uuid_bytes = bytearray(timestamp_ms.to_bytes(6, "big") + random_bytes)
+    uuid_bytes[6] = (uuid_bytes[6] & 0x0F) | 0x70
+    uuid_bytes[8] = (uuid_bytes[8] & 0x3F) | 0x80
+    return uuid.UUID(bytes=bytes(uuid_bytes))
+
+
+def _prepare_signed_callback(payload: dict[str, Any]) -> tuple[bytes, dict[str, str]]:
+    raw_body = json.dumps(
+        payload,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    timestamp = str(int(time.time()))
+    event_id = str(_uuid7())
+
+    digest = hmac.new(_callback_secret(), digestmod=hashlib.sha256)
+    digest.update(f"{timestamp}.{event_id}.".encode("ascii"))
+    digest.update(raw_body)
+
+    return raw_body, {
+        "Content-Type": "application/json",
+        "x-cff-timestamp": timestamp,
+        "x-cff-event-id": event_id,
+        "x-cff-signature": f"v1={digest.hexdigest()}",
+    }
+
+
 def _post_callback(callback_url: str, payload: dict[str, Any], timeout: tuple[int, int]) -> None:
+    raw_body, headers = _prepare_signed_callback(payload)
     with _http_session.post(
         callback_url,
-        json=payload,
+        data=raw_body,
         timeout=timeout,
         allow_redirects=False,
-        headers={"Content-Type": "application/json"},
+        headers=headers,
     ) as response:
         if 300 <= response.status_code < 400:
             raise requests.HTTPError("Callback redirects are disabled", response=response)
