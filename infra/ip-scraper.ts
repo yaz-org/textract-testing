@@ -27,20 +27,28 @@ const repo = new aws.ecr.Repository("ipScraper", {
   name: pulumi.interpolate`ip-scraper-${pulumi.getStack()}`,
   forceDelete: true,
   imageScanningConfiguration: { scanOnPush: true },
-  lifecyclePolicy: {
+  imageTagMutability: "IMMUTABLE_WITH_EXCLUSION",
+  imageTagMutabilityExclusionFilters: [
+    { filter: "latest", filterType: "WILDCARD" },
+  ],
+});
+
+new aws.ecr.LifecyclePolicy("IpScraperLifecycle", {
+  repository: repo.name,
+  policy: JSON.stringify({
     rules: [
       {
         rulePriority: 1,
-        description: "Keep only the 5 most recent images",
+        description: "Keep the five most recent rollback images",
         selection: {
-          tagStatus: "any",
+          tagStatus: "untagged",
           countType: "imageCountMoreThan",
           countNumber: 5,
         },
         action: { type: "expire" },
       },
     ],
-  },
+  }),
 });
 
 const authToken = aws.ecr.getAuthorizationTokenOutput({

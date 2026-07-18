@@ -30,7 +30,7 @@ describe("OnnxTR production promotion infrastructure", () => {
     );
     expect(productionConfig).toContain('$transform(Image, (args, _opts, name) => {');
     expect(productionConfig).toContain(
-      'if (!ONNXTR_SUBSCRIBER_IMAGE.test(name)) return;',
+      "if (ONNXTR_SUBSCRIBER_IMAGE.test(name)) {",
     );
     expect(productionConfig).toContain("...args.buildArgs");
     expect(productionConfig).toContain('ONNXTR_BYTECODE_MODE: "precompiled"');

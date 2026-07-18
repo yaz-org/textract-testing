@@ -1,14 +1,23 @@
 /// <reference path="./.sst/platform/config.d.ts" />
 
+import * as aws from "@pulumi/aws";
 import { Image } from "@pulumi/docker-build";
 
 type BytecodeMode = "stripped" | "precompiled";
 
-function benchmarkFunction(
+function benchmarkEnvironment(bytecodeMode: BytecodeMode) {
+  return {
+    ONNXTR_CACHE_DIR: "/opt/onnxtr_cache",
+    ONNXTR_MODEL_MANIFEST: "/opt/onnxtr_cache/model-manifest.json",
+    ONNXTR_MULTIPROCESSING_DISABLE: "TRUE",
+    ONNXTR_BENCHMARK_MODE: "TRUE",
+    ONNXTR_BYTECODE_MODE: bytecodeMode,
+  };
+}
+
+function benchmarkImageFunction(
   resourceName: string,
-  memoryMb: 2048 | 2560 | 3008,
   bytecodeMode: BytecodeMode,
-  sharedImageSource?: sst.aws.Function,
 ) {
   return new sst.aws.Function(resourceName, {
     handler: "packages/onnxtr-lambda/handler.lambda_handler",
@@ -16,29 +25,39 @@ function benchmarkFunction(
     python: { container: true },
     architecture: "x86_64",
     timeout: "3 minutes",
-    memory: `${memoryMb} MB`,
+    memory: "2048 MB",
     storage: "512 MB",
     // The production account currently has the Lambda default quota of 10.
     // AWS requires all 10 to remain unreserved. The harness permits one
     // in-flight invocation per function and at most six across a cohort.
     logging: { retention: "1 week", format: "text" },
-    environment: {
-      ONNXTR_CACHE_DIR: "/opt/onnxtr_cache",
-      ONNXTR_MODEL_MANIFEST: "/opt/onnxtr_cache/model-manifest.json",
-      ONNXTR_MULTIPROCESSING_DISABLE: "TRUE",
-      ONNXTR_BENCHMARK_MODE: "TRUE",
-      ONNXTR_BYTECODE_MODE: bytecodeMode,
-    },
-    ...(sharedImageSource
-      ? {
-          transform: {
-            function: (args) => {
-              args.imageUri = sharedImageSource.nodes.function.imageUri;
-            },
-          },
-        }
-      : {}),
+    environment: benchmarkEnvironment(bytecodeMode),
   });
+}
+
+function sharedImageBenchmarkFunction(
+  resourceName: string,
+  memoryMb: 2560 | 3008,
+  bytecodeMode: BytecodeMode,
+  imageSource: sst.aws.Function,
+) {
+  const fn = new aws.lambda.Function(resourceName, {
+    packageType: "Image",
+    imageUri: imageSource.nodes.function.imageUri,
+    role: imageSource.nodes.role.arn,
+    architectures: ["x86_64"],
+    timeout: 180,
+    memorySize: memoryMb,
+    ephemeralStorage: { size: 512 },
+    environment: { variables: benchmarkEnvironment(bytecodeMode) },
+  });
+
+  new aws.cloudwatch.LogGroup(`${resourceName}LogGroup`, {
+    name: $interpolate`/aws/lambda/${fn.name}`,
+    retentionInDays: 7,
+  });
+
+  return fn;
 }
 
 export default $config({
@@ -60,35 +79,33 @@ export default $config({
       };
     });
 
-    const stripped2048 = benchmarkFunction(
+    const stripped2048 = benchmarkImageFunction(
       "OnnxTRBenchmarkStripped2048",
-      2048,
       "stripped",
     );
-    const stripped2560 = benchmarkFunction(
+    const stripped2560 = sharedImageBenchmarkFunction(
       "OnnxTRBenchmarkStripped2560",
       2560,
       "stripped",
       stripped2048,
     );
-    const stripped3008 = benchmarkFunction(
+    const stripped3008 = sharedImageBenchmarkFunction(
       "OnnxTRBenchmarkStripped3008",
       3008,
       "stripped",
       stripped2048,
     );
-    const precompiled2048 = benchmarkFunction(
+    const precompiled2048 = benchmarkImageFunction(
       "OnnxTRBenchmarkPrecompiled2048",
-      2048,
       "precompiled",
     );
-    const precompiled2560 = benchmarkFunction(
+    const precompiled2560 = sharedImageBenchmarkFunction(
       "OnnxTRBenchmarkPrecompiled2560",
       2560,
       "precompiled",
       precompiled2048,
     );
-    const precompiled3008 = benchmarkFunction(
+    const precompiled3008 = sharedImageBenchmarkFunction(
       "OnnxTRBenchmarkPrecompiled3008",
       3008,
       "precompiled",

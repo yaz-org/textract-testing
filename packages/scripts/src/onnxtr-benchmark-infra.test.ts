@@ -20,10 +20,19 @@ describe("isolated OnnxTR benchmark infrastructure", () => {
     for (const resource of resources) {
       expect(source).toContain(`\"${resource}\"`);
     }
-    expect(source.match(/const (?:stripped|precompiled)\d+ = benchmarkFunction\(/g)).toHaveLength(
-      6,
-    );
-    expect(source).toContain("sharedImageSource.nodes.function.imageUri");
+    expect(
+      source.match(
+        /const (?:stripped|precompiled)2048 = benchmarkImageFunction\(/g,
+      ),
+    ).toHaveLength(2);
+    expect(
+      source.match(
+        /const (?:stripped|precompiled)(?:2560|3008) = sharedImageBenchmarkFunction\(/g,
+      ),
+    ).toHaveLength(4);
+    expect(source).toContain("imageSource.nodes.function.imageUri");
+    expect(source.match(/python: \{ container: true \}/g)).toHaveLength(1);
+    expect(source).toContain('packageType: "Image"');
   });
 
   test("is direct-invocation only and temporary", () => {
