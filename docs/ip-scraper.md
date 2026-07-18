@@ -3,7 +3,7 @@
 A two-part system that scrapes account statements from **BanescOnline** (a Venezuelan
 banking website). A submit endpoint enqueues jobs to an SQS FIFO queue (keyed by profile),
 and a Docker Lambda processes them sequentially per profile using Puppeteer/Chromium
-through a Proton VPN tunnel. Results are POSTed to a caller-provided callback URL.
+through a Proton VPN tunnel. Results are sent by signed POST to a caller-provided callback URL.
 
 ---
 
@@ -35,7 +35,7 @@ Client ──POST──▶ SubmitScraperFn (Function URL, API-key)
          │  │ 10. Detect dashboard (iframe gone)   │      │
          │  │ 11. Close modal (if present)         │      │
          │  │ 12. Fetch account statements         │      │
-         │  │ 13. POST results to callbackUrl      │──────┼──▶ Callback URL
+         │  │ 13. Signed POST to callbackUrl       │──────┼──▶ Callback URL
          │  │ 14. Logout → salir.aspx             │      │
          │  │ 15. Browser cleanup (finally)        │      │
          │  └──────────┬─────────────────────────┘      │
@@ -64,7 +64,7 @@ Client ──POST──▶ SubmitScraperFn (Function URL, API-key)
       looks up answers in credentials, types into `#txtPrimeraR` / `#txtSegundaR`, submits
     - Finds `#txtClave` → types password character-by-character → Enter
     - Waits for redirect: iframe disappears → /Mantis/WebSite/Default.aspx (dashboard)
-11. If dashboard reached: close modal → fetch statements → POST `{ success, transactions }` to callbackUrl → logout
+11. If dashboard reached: close modal → fetch statements → signed POST `{ success, transactions }` to callbackUrl → logout
 12. Browser cleanup on finally block; VPN cleanup on outer finally block
 
 ---
@@ -98,6 +98,7 @@ import chromium from "@sparticuz/chromium";
 import puppeteer from "puppeteer-extra";
 import StealthPlugin from "puppeteer-extra-plugin-stealth";
 import TelegramBot from "node-telegram-bot-api";
+import { prepareSignedCallback } from "./callback-signing.mjs";
 
 puppeteer.use(StealthPlugin());
 
@@ -229,7 +230,7 @@ clicks Consultar, verifies the transactions table by its headers, and extracts r
 8. If table missing, check for "no movements" message → treat as success with empty array
 9. Extract each row as `{ date, description, reference, amount, type, balance }`
 
-Results are returned to the caller via callbackUrl POST (not Telegram).
+Results are returned to the caller via a signed callback URL POST (not Telegram).
 
 ### Logout
 
@@ -336,17 +337,19 @@ export const handler = async (event) => {
       // On success:
       const statementsResult = await fetchStatements(page);
 
-      // POST results to callbackUrl
+      // Sign and POST results to callbackUrl
       if (statementsResult?.success && event.callbackUrl) {
+        const callbackPayload = {
+          success: true,
+          profileName,
+          transactions: statementsResult.transactions,
+          transactionsCount: statementsResult.transactions.length,
+        };
+        const { body: callbackBody, headers } = prepareSignedCallback(callbackPayload);
         await fetch(event.callbackUrl, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            success: true,
-            profileName,
-            transactions: statementsResult.transactions,
-            transactionsCount: statementsResult.transactions.length,
-          }),
+          headers,
+          body: callbackBody,
         });
       }
 
@@ -407,7 +410,7 @@ waitForFunction dashboard detection (25s)
             │     ├── click #ctl00_cp_btnMostrar (Consultar)
             │     ├── verify table.DefGV headers match expected
             │     ├── extract rows → JSON
-            │     └── POST { success, transactions } → callbackUrl
+            │     └── signed POST { success, transactions } → callbackUrl
             ├── performLogout() → #ctl00_btnSalir → waitForFunction("salir.aspx")
             └── return { step: "logged-out" }
                  (session NOT saved — server-side session left intact)
@@ -588,6 +591,7 @@ Container image, 2048 MB memory, 60s timeout, 1024 MB ephemeral storage.
 | `WEB_PAGE_CREDENTIALS` | `WebPageCredentials` secret | Base64 JSON profile map |
 | `TELEGRAM_BOT_TOKEN` | `TelegramBotToken` secret | Bot token for error screenshots only |
 | `TELEGRAM_CHAT_ID` | `TelegramChatId` secret | Chat to receive error screenshots |
+| `CFF_HMAC_SECRET_HEX` | `StatementCallbackHmacSecret` secret | 64-character hex callback-signing key |
 | `SESSION_STATE_KEY` | hardcoded | `session-state.json` |
 
 ### FIFO Queue + Event Source Mapping
@@ -603,7 +607,7 @@ ensures sequential execution per profile.
 
 ## Secrets Management
 
-Seven SST secrets:
+Eight SST secrets:
 
 | Secret | Content | How it's used                                                                           |
 |---|---|-----------------------------------------------------------------------------------------|
@@ -614,6 +618,7 @@ Seven SST secrets:
 | `TelegramBotToken` | Telegram bot API token | Initializes `node-telegram-bot-api` for screenshots                                     |
 | `TelegramChatId` | Numeric Telegram chat ID | Destination for error screenshot messages                                                   |
 | `StatementsScraperApiKey` | API key string | Validates submit-scraper requests via `x-api-key` header                                  |
+| `StatementCallbackHmacSecret` | 64 hexadecimal characters encoding 32 random bytes | Injected as `CFF_HMAC_SECRET_HEX` and used only to sign statement callbacks |
 
 **Credentials JSON structure:**
 
@@ -636,6 +641,8 @@ Set per stage:
 bunx sst secret set --stage production WebPageCredentials "$(base64 -w0 creds.json)"
 bunx sst secret set --stage production TelegramBotToken "87707...:AAEoRJ..."
 bunx sst secret set --stage production TelegramChatId "some chat id number"
+bunx sst secret set --stage production \
+  StatementCallbackHmacSecret "$(openssl rand -hex 32)"
 ```
 
 ---
@@ -667,7 +674,7 @@ curl -X POST "$(bunx sst get --stage production SubmitScraperUrl)" \
 ```
 
 The submit endpoint returns `{ "success": true }` immediately. The scraper processes
-the job asynchronously and POSTs the result to `callbackUrl`.
+the job asynchronously and sends the result by signed POST to `callbackUrl`.
 
 ### Callback payload (success)
 
@@ -692,6 +699,17 @@ the job asynchronously and POSTs the result to `callbackUrl`.
   "transactionsCount": 0
 }
 ```
+
+Successful callbacks include these headers:
+
+```http
+Content-Type: application/json
+x-cff-timestamp: <unix-seconds>
+x-cff-event-id: <uuidv7>
+x-cff-signature: v1=<64-lowercase-hex-characters>
+```
+
+The body is serialized once, signed as exact UTF-8 bytes, and sent as the same Node.js `Buffer`. See the authoritative [HMAC Callback Protocol and Implementation Specification](hmac-callback-spec.md) for the complete wire contract, receiver requirements, secret rotation, and replay semantics. The scraper sends callbacks only for successful statement extraction.
 
 ### Direct Lambda invocation (for debugging)
 
@@ -765,7 +783,8 @@ Lambda timeout: 60s (allows for cold start + VPN failover + 25s dashboard detect
 | Transactions table headers mismatch | `fetchStatements()` returns `{ success: false, reason: "no-transaction-table" }` |
 | FIFO queue visibility timeout | 3min covers total ~24s warm invoke; DLQ catches messages after 3 retries |
 | Concurrent invocations for same profile | FIFO + MessageGroupId guarantees serial processing per profile |
-| Callback URL unreachable | Error logged but handler continues; caller can retry via new submit |
+| Callback signing secret missing or invalid | Callback preparation fails closed; error is logged and handler cleanup continues; no unsigned request is sent |
+| Callback URL unreachable or callback returns an error status | Network errors are logged, and non-2xx statuses are not currently converted to thrown errors; the handler continues and does not trigger SQS retry; caller can retry via a new submit |
 | Logout link not found | `performLogout()` returns `{ success: false }` without failing the handler |
 | Logout navigation timeout | 15s timeout on `waitForFunction("salir.aspx")`; returns partial result |
 | Session cookies expire server-side | Fresh login generates new cookies; old session gracefully handled |
