@@ -6,7 +6,10 @@ import chromium from "@sparticuz/chromium";
 import puppeteer from "puppeteer-extra";
 import StealthPlugin from "puppeteer-extra-plugin-stealth";
 import TelegramBot from "node-telegram-bot-api";
-import { prepareSignedCallback } from "./callback-signing.mjs";
+import {
+  CallbackDeliveryError,
+  postSignedCallback,
+} from "./callback-delivery.mjs";
 
 puppeteer.use(StealthPlugin());
 
@@ -728,6 +731,7 @@ export const handler = async (event) => {
             return { success: false, reason: "exception" };
           });
 
+          let callbackError = null;
           if (statementsResult?.success && event.callbackUrl) {
             try {
               const callbackPayload = {
@@ -736,17 +740,14 @@ export const handler = async (event) => {
                 transactions: statementsResult.transactions,
                 transactionsCount: statementsResult.transactions.length,
               };
-              const { body: callbackBody, headers } = prepareSignedCallback(
+              const callbackResponse = await postSignedCallback(
+                event.callbackUrl,
                 callbackPayload,
               );
-              const resp = await fetch(event.callbackUrl, {
-                method: "POST",
-                headers,
-                body: callbackBody,
-              });
-              console.log(`[callback] Posted to ${event.callbackUrl} (${resp.status})`);
+              console.log(`[callback] Delivered (${callbackResponse.status})`);
             } catch (err) {
-              console.error(`[callback] Failed: ${err.message}`);
+              callbackError = err;
+              console.error("[callback] Delivery failed");
             }
           }
 
@@ -754,6 +755,10 @@ export const handler = async (event) => {
             console.log(`[logout] Error: ${err.message}`);
             return { success: false, method: null, finalUrl: page.url() };
           });
+
+          if (callbackError) {
+            throw callbackError;
+          }
 
           // Return early — session is server-side, don't clear or overwrite
           return {
@@ -776,6 +781,9 @@ export const handler = async (event) => {
           };
         }
       } catch (err) {
+        if (err instanceof CallbackDeliveryError) {
+          throw err;
+        }
         console.log(`[handler] Could not determine post-password URL: ${err.message}`);
         await sendScreenshot(page, "post-password-unknown", {
           url: page.url(),

@@ -347,6 +347,18 @@ class HandlerContractTests(unittest.TestCase):
         callback.assert_called_once()
         self.assertFalse(path.exists())
 
+    def test_success_callback_failure_retries_without_sending_failure_callback(self):
+        response, callback, path = self._run_successful_record(
+            benchmark_mode=False,
+            callback_error=RuntimeError("HTTP 503"),
+        )
+        self.assertEqual(
+            response,
+            {"batchItemFailures": [{"itemIdentifier": "production-success"}]},
+        )
+        callback.assert_called_once()
+        self.assertFalse(path.exists())
+
     def test_benchmark_mode_skips_success_callback_and_returns_safe_summary(self):
         response, callback, path = self._run_successful_record(benchmark_mode=True)
         callback.assert_not_called()
@@ -441,7 +453,9 @@ class HandlerContractTests(unittest.TestCase):
         self.assertEqual(first, second)
         self.assertNotEqual(first, handler._output_digest(pages, "changed", 0.9, model_info))
 
-    def _run_successful_record(self, *, benchmark_mode: bool):
+    def _run_successful_record(
+        self, *, benchmark_mode: bool, callback_error: Exception | None = None
+    ):
         result = SimpleNamespace(
             pages=[
                 SimpleNamespace(
@@ -493,7 +507,7 @@ class HandlerContractTests(unittest.TestCase):
         temporary.write(b"image")
         temporary.close()
         path = Path(temporary.name)
-        callback = Mock()
+        callback = Mock(side_effect=callback_error)
 
         with ExitStack() as stack:
             stack.enter_context(patch.object(handler, "_BENCHMARK_MODE_ENABLED", benchmark_mode))

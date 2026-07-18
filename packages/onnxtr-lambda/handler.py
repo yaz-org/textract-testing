@@ -34,6 +34,10 @@ _cold_start = True
 _http_session = requests.Session()
 
 
+class CallbackDeliveryError(RuntimeError):
+    """A processed document could not be delivered to its callback receiver."""
+
+
 def _log(level: str, event: str, **fields: Any) -> None:
     print(json.dumps({"level": level, "event": event, **fields}, separators=(",", ":")))
 
@@ -451,7 +455,10 @@ def _process_record(
             }
 
         callback_started = time.perf_counter()
-        _post_callback(callback_url, payload, _CALLBACK_TIMEOUT)
+        try:
+            _post_callback(callback_url, payload, _CALLBACK_TIMEOUT)
+        except Exception as exc:
+            raise CallbackDeliveryError("Document callback delivery failed") from exc
         _log(
             "INFO",
             "callback_completed",
@@ -492,16 +499,25 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                 record, context, invocation_cold_start and index == 0
             )
         except Exception as exc:
+            callback_delivery_failed = isinstance(exc, CallbackDeliveryError)
             _log(
                 "ERROR",
-                "document_failed",
+                (
+                    "callback_delivery_failed"
+                    if callback_delivery_failed
+                    else "document_failed"
+                ),
                 sqsMessageId=message_id,
                 lambdaRequestId=getattr(context, "aws_request_id", None),
                 errorType=type(exc).__name__,
                 retryable=True,
             )
 
-            callback_url = None if _is_benchmark_record(record) else _safe_callback_url(record)
+            callback_url = (
+                None
+                if callback_delivery_failed or _is_benchmark_record(record)
+                else _safe_callback_url(record)
+            )
             if callback_url is not None:
                 try:
                     _post_callback(

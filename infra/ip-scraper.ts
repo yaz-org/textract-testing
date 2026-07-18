@@ -155,6 +155,7 @@ new aws.iam.RolePolicy("IpScraperSQSAccess", {
 });
 
 new aws.lambda.EventSourceMapping("IpScraperSQS", {
+  batchSize: 1,
   eventSourceArn: statementsScraperQueue.arn,
   functionName: fn.name,
 });

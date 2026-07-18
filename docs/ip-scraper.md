@@ -783,8 +783,8 @@ Lambda timeout: 60s (allows for cold start + VPN failover + 25s dashboard detect
 | Transactions table headers mismatch | `fetchStatements()` returns `{ success: false, reason: "no-transaction-table" }` |
 | FIFO queue visibility timeout | 3min covers total ~24s warm invoke; DLQ catches messages after 3 retries |
 | Concurrent invocations for same profile | FIFO + MessageGroupId guarantees serial processing per profile |
-| Callback signing secret missing or invalid | Callback preparation fails closed; error is logged and handler cleanup continues; no unsigned request is sent |
-| Callback URL unreachable or callback returns an error status | Network errors are logged, and non-2xx statuses are not currently converted to thrown errors; the handler continues and does not trigger SQS retry; caller can retry via a new submit |
+| Callback signing secret missing or invalid | Callback preparation fails closed; logout and browser cleanup run, then the Lambda invocation fails so SQS retries; no unsigned request is sent |
+| Callback URL unreachable or callback returns an error status | Network and non-2xx failures are logged without the callback URL, cleanup runs, and the Lambda invocation fails so SQS retries and eventually uses the DLQ |
 | Logout link not found | `performLogout()` returns `{ success: false }` without failing the handler |
 | Logout navigation timeout | 15s timeout on `waitForFunction("salir.aspx")`; returns partial result |
 | Session cookies expire server-side | Fresh login generates new cookies; old session gracefully handled |

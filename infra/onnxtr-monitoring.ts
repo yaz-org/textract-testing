@@ -169,6 +169,18 @@ new aws.cloudwatch.LogMetricFilter("OnnxTRFailureCallbackFailedMetricFilter", {
   },
 });
 
+new aws.cloudwatch.LogMetricFilter("OnnxTRCallbackDeliveryFailedMetricFilter", {
+  name: `${alarmNamePrefix}callback-delivery-failed`,
+  logGroupName: subscriberLogGroupName,
+  pattern: '{ $.event = "callback_delivery_failed" }',
+  metricTransformation: {
+    name: "CallbackDeliveryFailed",
+    namespace: metricNamespace,
+    value: "1",
+    unit: "Count",
+  },
+});
+
 const alarmActions = [onnxtrAlertTopic.arn];
 const commonAlarmArgs = {
   actionsEnabled: true,
@@ -295,6 +307,23 @@ export const onnxtrFailureCallbackFailedAlarm = new aws.cloudwatch.MetricAlarm(
     alarmDescription: "An OnnxTR terminal failure callback could not be delivered.",
     namespace: metricNamespace,
     metricName: "FailureCallbackFailed",
+    statistic: "Sum",
+    period: 60,
+    evaluationPeriods: 1,
+    datapointsToAlarm: 1,
+    threshold: 1,
+    comparisonOperator: "GreaterThanOrEqualToThreshold",
+  },
+);
+
+export const onnxtrCallbackDeliveryFailedAlarm = new aws.cloudwatch.MetricAlarm(
+  "OnnxTRCallbackDeliveryFailedAlarm",
+  {
+    ...commonAlarmArgs,
+    name: `${alarmNamePrefix}callback-delivery-failed`,
+    alarmDescription: "A completed OnnxTR result could not be delivered.",
+    namespace: metricNamespace,
+    metricName: "CallbackDeliveryFailed",
     statistic: "Sum",
     period: 60,
     evaluationPeriods: 1,
