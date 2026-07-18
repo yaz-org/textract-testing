@@ -1,6 +1,12 @@
 # dependencies
 node_modules
 
+# python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
 # sst
 .sst
 

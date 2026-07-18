@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import time
@@ -22,6 +23,7 @@ _DOWNLOAD_TIMEOUT = (5, 120)
 _CALLBACK_TIMEOUT = (5, 30)
 _FAILURE_CALLBACK_TIMEOUT = (5, 10)
 _DOWNLOAD_CHUNK_BYTES = 1024 * 1024
+_BENCHMARK_MODE_ENABLED = os.getenv("ONNXTR_BENCHMARK_MODE") == "TRUE"
 
 _model = None
 _cold_start = True
@@ -197,7 +199,7 @@ def _serialize_result(result: Any) -> tuple[list[dict[str, Any]], str, float | N
 
 def _download_document(download_url: str) -> tuple[Path, int]:
     tmp_path = Path("/tmp") / f"{uuid.uuid4()}.image"
-    document_bytes = 0s3
+    document_bytes = 0
 
     try:
         with _http_session.get(
@@ -268,8 +270,40 @@ def _safe_callback_url(record: dict[str, Any]) -> str | None:
         return None
 
 
-def _process_record(record: dict[str, Any], context: Any, cold_start: bool) -> None:
+def _is_benchmark_record(record: dict[str, Any]) -> bool:
     message_id = record.get("messageId")
+    return (
+        _BENCHMARK_MODE_ENABLED
+        and isinstance(message_id, str)
+        and message_id.startswith("benchmark-")
+    )
+
+
+def _output_digest(
+    pages: list[dict[str, Any]],
+    full_text: str,
+    average_confidence: float | None,
+    model_info: dict[str, str],
+) -> str:
+    canonical_output = json.dumps(
+        {
+            "pages": pages,
+            "fullText": full_text,
+            "averageConfidence": average_confidence,
+            "modelInfo": model_info,
+        },
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return hashlib.sha256(canonical_output).hexdigest()
+
+
+def _process_record(
+    record: dict[str, Any], context: Any, cold_start: bool
+) -> dict[str, Any] | None:
+    message_id = record.get("messageId")
+    benchmark_mode = _is_benchmark_record(record)
     download_url, callback_url = _parse_record(record)
     tmp_path: Path | None = None
     total_started = time.perf_counter()
@@ -293,7 +327,9 @@ def _process_record(record: dict[str, Any], context: Any, cold_start: bool) -> N
         document = DocumentFile.from_images(str(tmp_path))
         decode_ms = round((time.perf_counter() - decode_started) * 1000)
 
+        model_init_started = time.perf_counter()
         model = get_model()
+        model_init_ms = round((time.perf_counter() - model_init_started) * 1000)
         ocr_started = time.perf_counter()
         result = model(document)
         ocr_ms = round((time.perf_counter() - ocr_started) * 1000)
@@ -301,6 +337,15 @@ def _process_record(record: dict[str, Any], context: Any, cold_start: bool) -> N
         serialize_started = time.perf_counter()
         pages, full_text, average_confidence, word_count = _serialize_result(result)
         serialization_ms = round((time.perf_counter() - serialize_started) * 1000)
+        model_info = {
+            "detArch": _DET_ARCH,
+            "recoArch": _RECO_ARCH,
+        }
+        output_digest = (
+            _output_digest(pages, full_text, average_confidence, model_info)
+            if benchmark_mode
+            else None
+        )
         inference_ms = round((time.perf_counter() - total_started) * 1000)
 
         del result
@@ -315,10 +360,7 @@ def _process_record(record: dict[str, Any], context: Any, cold_start: bool) -> N
             "fullText": full_text,
             "averageConfidence": average_confidence,
             "inferenceTimeMs": inference_ms,
-            "modelInfo": {
-                "detArch": _DET_ARCH,
-                "recoArch": _RECO_ARCH,
-            },
+            "modelInfo": model_info,
         }
 
         _log(
@@ -328,6 +370,7 @@ def _process_record(record: dict[str, Any], context: Any, cold_start: bool) -> N
             lambdaRequestId=getattr(context, "aws_request_id", None),
             downloadMs=download_ms,
             decodeMs=decode_ms,
+            modelInitMs=model_init_ms,
             ocrMs=ocr_ms,
             serializationMs=serialization_ms,
             totalProcessingMs=inference_ms,
@@ -336,6 +379,23 @@ def _process_record(record: dict[str, Any], context: Any, cold_start: bool) -> N
             wordCount=word_count,
             averageConfidence=average_confidence,
         )
+
+        if benchmark_mode:
+            return {
+                "downloadMs": download_ms,
+                "decodeMs": decode_ms,
+                "modelInitMs": model_init_ms,
+                "ocrMs": ocr_ms,
+                "serializationMs": serialization_ms,
+                "totalProcessingMs": inference_ms,
+                "documentBytes": document_bytes,
+                "pageCount": len(pages),
+                "wordCount": word_count,
+                "averageConfidence": (
+                    average_confidence if average_confidence is not None else 0.0
+                ),
+                "outputDigest": output_digest,
+            }
 
         callback_started = time.perf_counter()
         _post_callback(callback_url, payload, _CALLBACK_TIMEOUT)
@@ -346,12 +406,13 @@ def _process_record(record: dict[str, Any], context: Any, cold_start: bool) -> N
             lambdaRequestId=getattr(context, "aws_request_id", None),
             callbackMs=round((time.perf_counter() - callback_started) * 1000),
         )
+        return None
     finally:
         if tmp_path is not None:
             tmp_path.unlink(missing_ok=True)
 
 
-def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, list[dict[str, str]]]:
+def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     global _cold_start
     invocation_cold_start = _cold_start
     _cold_start = False
@@ -359,8 +420,12 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, list[dict[s
     records = event.get("Records")
     if not isinstance(records, list):
         raise ValueError("Records must be an array")
+    if any(isinstance(record, dict) and _is_benchmark_record(record) for record in records):
+        if len(records) != 1:
+            raise ValueError("Benchmark invocations must contain exactly one record")
 
     batch_item_failures: list[dict[str, str]] = []
+    benchmark_summary: dict[str, Any] | None = None
     for index, record in enumerate(records):
         if not isinstance(record, dict):
             raise ValueError("Every SQS record must be an object")
@@ -370,7 +435,9 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, list[dict[s
             raise ValueError("Every SQS record must have a non-empty messageId")
 
         try:
-            _process_record(record, context, invocation_cold_start and index == 0)
+            benchmark_summary = _process_record(
+                record, context, invocation_cold_start and index == 0
+            )
         except Exception as exc:
             _log(
                 "ERROR",
@@ -381,7 +448,7 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, list[dict[s
                 retryable=True,
             )
 
-            callback_url = _safe_callback_url(record)
+            callback_url = None if _is_benchmark_record(record) else _safe_callback_url(record)
             if callback_url is not None:
                 try:
                     _post_callback(
@@ -406,4 +473,7 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, list[dict[s
                 batch_item_failures.append({"itemIdentifier": unprocessed_id})
             break
 
-    return {"batchItemFailures": batch_item_failures}
+    response: dict[str, Any] = {"batchItemFailures": batch_item_failures}
+    if benchmark_summary is not None and not batch_item_failures:
+        response["benchmark"] = benchmark_summary
+    return response
