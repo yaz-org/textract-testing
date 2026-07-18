@@ -93,7 +93,7 @@ describe("OnnxTR production promotion infrastructure", () => {
   test("defines the complete OnnxTR alarm set with recovery actions", () => {
     expect(
       monitoringSource.match(/new aws\.cloudwatch\.MetricAlarm\(/g),
-    ).toHaveLength(7);
+    ).toHaveLength(8);
     expect(monitoringSource).toContain('metricName: "Errors"');
     expect(monitoringSource).toContain('metricName: "Throttles"');
     expect(monitoringSource).toContain('metricName: "Duration"');
@@ -105,6 +105,7 @@ describe("OnnxTR production promotion infrastructure", () => {
     );
     expect(monitoringSource).toContain('metricName: "DocumentFailed"');
     expect(monitoringSource).toContain('metricName: "FailureCallbackFailed"');
+    expect(monitoringSource).toContain('metricName: "CallbackDeliveryFailed"');
     expect(monitoringSource).toContain('treatMissingData: "notBreaching"');
     expect(monitoringSource).toContain("okActions: alarmActions");
   });

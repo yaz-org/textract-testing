@@ -152,11 +152,11 @@ The document processor:
 - Signs sanitized document-processing failure callbacks.
 - Sends `requests.post(data=rawBody)`, not `json=payload`.
 - Disables redirects.
-- Treats callback HTTP errors as processing failures.
+- Treats callback HTTP errors as delivery failures.
 - Returns the SQS message in `batchItemFailures`, enabling retry and eventual DLQ behavior.
 - Suppresses callbacks entirely for benchmark-mode records.
 
-If a successful callback fails, the current handler may attempt a separately signed failure callback and still mark the SQS record failed. Every attempt receives a new timestamp, UUIDv7 event ID, and signature.
+If a successful callback fails, the handler marks the SQS record failed for retry but does not send a misleading document-processing failure callback. Actual document-processing failures still use the separately signed sanitized failure callback. Every HTTP attempt receives a new timestamp, UUIDv7 event ID, and signature.
 
 ### 10.2 Statement processor
 
@@ -165,10 +165,11 @@ The statement processor:
 - Signs successful statement callbacks only.
 - Sends the signed body as a Node.js `Buffer`.
 - Does not currently send a failure callback.
-- Catches callback preparation and network errors and continues processor cleanup.
-- Does not turn non-2xx `fetch` responses into thrown errors because `fetch` does not throw solely for HTTP status codes.
+- Attempts logout and browser cleanup before propagating callback failures.
+- Converts non-2xx `fetch` responses, network failures, timeouts, and signing failures into delivery errors.
+- Uses an SQS event-source batch size of one so every delivered record is processed by the single-record handler.
 
-Consequently, current statement callback failures do not cause an SQS retry. This is a reliability limitation of the statement processor, not part of the HMAC protocol.
+Consequently, statement callback failures fail the Lambda invocation and allow the FIFO SQS message to retry and eventually reach its DLQ.
 
 ## 11. Receiver verification contract
 
