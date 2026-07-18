@@ -98,7 +98,7 @@ import chromium from "@sparticuz/chromium";
 import puppeteer from "puppeteer-extra";
 import StealthPlugin from "puppeteer-extra-plugin-stealth";
 import TelegramBot from "node-telegram-bot-api";
-import { prepareSignedCallback } from "./callback-signing.mjs";
+import { postSignedCallback } from "./callback-delivery.mjs";
 
 puppeteer.use(StealthPlugin());
 
@@ -345,12 +345,7 @@ export const handler = async (event) => {
           transactions: statementsResult.transactions,
           transactionsCount: statementsResult.transactions.length,
         };
-        const { body: callbackBody, headers } = prepareSignedCallback(callbackPayload);
-        await fetch(event.callbackUrl, {
-          method: "POST",
-          headers,
-          body: callbackBody,
-        });
+        await postSignedCallback(event.callbackUrl, callbackPayload);
       }
 
       await performLogout(page);
@@ -709,7 +704,9 @@ x-cff-event-id: <uuidv7>
 x-cff-signature: v1=<64-lowercase-hex-characters>
 ```
 
-The body is serialized once, signed as exact UTF-8 bytes, and sent as the same Node.js `Buffer`. See the authoritative [HMAC Callback Protocol and Implementation Specification](hmac-callback-spec.md) for the complete wire contract, receiver requirements, secret rotation, and replay semantics. The scraper sends callbacks only for successful statement extraction.
+The body is serialized once, signed as exact UTF-8 bytes, and sent as the same Node.js `Buffer`. `postSignedCallback` applies a 30-second timeout and turns signing, timeout, network, and non-2xx failures into `CallbackDeliveryError`. Logout and browser cleanup run before the error propagates, causing the batch-size-one Lambda invocation to fail so SQS retries and may eventually use the DLQ. Callback failure logs omit the callback URL.
+
+See the authoritative [HMAC Callback Protocol and Implementation Specification](hmac-callback-spec.md) and the [CFF HMAC Callback Receiver and Operations Specification](https://github.com/yazalulloa/cactus-fast-food/blob/main/specs/hmac-callback-receiver.md) for the complete wire and receiver contracts. Sender and receiver support are deployed in production, but a controlled end-to-end production statement callback has not yet evidenced receiver acceptance. The scraper sends callbacks only for successful statement extraction.
 
 ### Direct Lambda invocation (for debugging)
 

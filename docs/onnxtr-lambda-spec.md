@@ -85,13 +85,13 @@ The following subset was deployed and verified in production on 2026-07-17 witho
 | Downloads | Reuses a Requests session, streams in bounded chunks, enforces a configurable 20 MiB limit, separates connect/read timeouts, disables redirects, and cleans partial files |
 | Serialization | Walks the result hierarchy once while producing JSON, full text, confidence totals, page count, and normalized scalar values |
 | Privacy and errors | Removes URL logging and public tracebacks, uses timezone-aware UTC timestamps, validates the basic SQS body shape, and stops after the first FIFO record failure |
-| Callback authentication | Signs every non-benchmark success and sanitized failure callback with the processor-specific HMAC secret, a Unix timestamp, and a fresh UUIDv7 event ID; receiver verification remains open |
+| Callback authentication | Signs every non-benchmark success and sanitized failure callback with the processor-specific HMAC secret, a Unix timestamp, and a fresh UUIDv7 event ID; the external CFF receiver verifies the exact bytes before parsing |
 | Reproducibility | Aligns Python 3.13, installs a frozen hash-checked export of `uv.lock`, pins the base and UV image digests, pins Requests and Pillow, removes unused `boto3`, and uses an exact reviewed OnnxTR commit |
 | Benchmarking | Invokes six temporary Lambdas directly with synthetic SQS events; benchmark mode suppresses callbacks, creates no queue, and does not alter FIFO groups or the production event source |
 
 Verification completed for this repository state:
 
-- All 20 Python package tests, 25 Bun benchmark/infrastructure tests, and 6 Telegram alarm notifier tests pass.
+- All 21 Python package tests, 25 Bun benchmark/infrastructure tests, and 6 Telegram alarm notifier tests pass.
 - The final x86-64 image builds successfully and imports the handler.
 - A network-disabled container initializes the locally baked predictor in approximately 2.3 seconds in local Docker and completes an OCR smoke test. This is evidence that runtime model download is unnecessary, not an AWS Lambda performance benchmark.
 - The built image contains two model files totaling 197,506,608 bytes and is approximately 547 MB locally. ECR compressed size and Lambda runtime measurements can differ.
@@ -100,9 +100,9 @@ Verification completed for this repository state:
 - Three post-deployment documents and callbacks completed successfully before benchmarking; the first observed cold document was approximately 100.9 seconds and two warm documents were approximately 8.5 and 8.9 seconds.
 - A 390-invocation, direct-only benchmark completed with zero errors, timeouts, callbacks, or output mismatches. Its precompiled 3,008 MB recommendation was promoted in a separately reviewed production change on 2026-07-18.
 - The isolated benchmark application was removed afterward; zero temporary functions, log groups, roles, event-source mappings, or Function URLs remain.
-- Seven encrypted CloudWatch alarms notify the existing production Telegram channel. Controlled `ALARM` and `OK` transitions were delivered successfully, and the subscriber log group has metric filters for `document_failed` and `failure_callback_failed`.
+- Eight encrypted CloudWatch alarms notify the existing production Telegram channel. Controlled `ALARM` and `OK` transitions were delivered successfully, and the subscriber log group has metric filters for `document_failed`, `failure_callback_failed`, and `callback_delivery_failed`.
 
-Sender signing is implemented on `main`. These controls remain open: receiver signature verification and freshness enforcement, business idempotency, URL host/IP validation, image byte and pixel validation, stable retry/terminal error codes, and broader stage-level timing metrics. Ground-truth OCR accuracy evaluation also remains separate from the completed output-equivalence benchmark.
+Sender signing and CFF receiver verification, freshness enforcement, replay claims, and document semantic idempotency are implemented and deployed. These controls remain open: URL host/IP validation, image byte and pixel validation, stable retry/terminal error codes, broader stage-level timing metrics, and a controlled production statement-callback smoke test. Ground-truth OCR accuracy evaluation also remains separate from the completed output-equivalence benchmark.
 
 ## 2. Purpose and scope
 
@@ -676,7 +676,9 @@ The benchmark application did not promote the recommendation. After validating a
 
 On 2026-07-18, a separate production promotion changed only the subscriber image and memory configuration to precompiled bytecode at 3,008 MB. Read-only verification found the function Active with a successful update status, x86-64 architecture, 180-second timeout, 512 MB ephemeral storage, 3,723 dependency `.pyc` files, the compiled handler, and the baked model manifest. The deployed ECR image scan completed with zero critical and zero high findings. The FIFO event-source mapping retained batch size one, zero batching window, and `ReportBatchItemFailures`; visibility remained 1,080 seconds and redrive remained five receives. The source queue and DLQ were empty, with zero Lambda errors and throttles in the immediate window. Because no natural production invocation had occurred yet, traffic-dependent performance and callback acceptance are pending rather than passed.
 
-The same release added seven CloudWatch alarms for Lambda errors, throttles, p99 duration, queue age, DLQ depth, document failures, and failure-callback failures. Notifications use an encrypted SNS topic and the existing Telegram channel; controlled `ALARM` and recovery notifications were delivered. URLs, OCR text, payloads, account identifiers, and physical resource identifiers are excluded from notifier messages.
+A later 2026-07-18 incident and remediation supplied that missing callback evidence. At `2026-07-18T19:29:35Z`, a production document callback passed exact-body HMAC verification in CFF, atomically claimed its replay event, completed the document mutation, and returned `200`. A subsequent read-only check found the document source queue and DLQ empty, so no redrive was required. See the [HMAC callback specification](hmac-callback-spec.md) and [CFF receiver companion specification](https://github.com/yazalulloa/cactus-fast-food/blob/main/specs/hmac-callback-receiver.md).
+
+The initial release added seven CloudWatch alarms for Lambda errors, throttles, p99 duration, queue age, DLQ depth, document failures, and failure-callback failures. The delivery-reliability remediation added an eighth alarm for `CallbackDeliveryFailed`. Notifications use an encrypted SNS topic and the existing Telegram channel; controlled `ALARM` and recovery notifications were delivered. URLs, OCR text, payloads, account identifiers, and physical resource identifiers are excluded from notifier messages.
 
 The one-hour and 24-hour operational observations are time-gated. If no production traffic occurs in either window, the traffic-dependent result must be labeled **insufficient traffic**, while configuration equality remains valid evidence.
 
@@ -684,14 +686,14 @@ The one-hour and 24-hour operational observations are time-gated. If no producti
 
 ### 7.1 Summary
 
-Severity records the impact at discovery. Deployment on 2026-07-17 closed C1, C3, H1-H3, the byte-streaming portion of H5, H7-H10, L1-L4, and part of M1/M2; C1 still lacks an intentionally forced production retry test. The 2026-07-18 promotion added the benchmark-selected memory/bytecode configuration, production image scanning evidence, failure metric filters, and seven Telegram-backed alarms. Sender-side HMAC signing is implemented on `main`; C2, receiver verification under C4, H4, H6, M3-M5, image/pixel validation, and finer-grained timing metrics remain open.
+Severity records the impact at discovery. Deployment on 2026-07-17 closed C1, C3, H1-H3, the byte-streaming portion of H5, H7-H10, L1-L4, and part of M1/M2; C1 still lacks an intentionally forced production retry test. The 2026-07-18 promotion added the benchmark-selected memory/bytecode configuration, production image scanning evidence, failure metric filters, and Telegram-backed alarms. The later HMAC remediation closed C4 with deployed receiver verification, replay claims, and document semantic idempotency. C2, H4, M3-M5, image/pixel validation, and finer-grained timing metrics remain open; H6 is mitigated for the CFF receiver but remains a protocol-level concern for other consumers.
 
 | ID | Severity | Finding | Primary impact | Target control |
 | --- | --- | --- | --- | --- |
 | C1 | Critical | Historical: partial SQS response was not enabled; corrected 2026-07-17 | Failed documents could be deleted instead of retried | Batch size 1 and `partialResponses: true` are deployed |
 | C2 | Critical | Message controls both outbound URLs | SSRF and unintended network access | Strict scheme, host, IP, port, path, and redirect validation |
 | C3 | Critical | Historical: full presigned URLs were logged; corrected 2026-07-17 | Temporary S3 credential exposure | Deployed logs omit URLs and query strings |
-| C4 | Critical | Sender signing is implemented; the public receiver does not verify it | Forged inference writes and cost abuse until verification is enforced | Receiver HMAC verification, freshness checks, replay claims, and business idempotency |
+| C4 | Critical | Historical: sender/receiver HMAC enforcement was incomplete; corrected 2026-07-18 | Forged inference writes and cost abuse | Exact-body receiver verification, freshness checks, replay claims, and document semantic idempotency are deployed |
 | H1 | High | Historical: visibility was 240s for a 180s function | Premature duplicate processing during retries/throttles | 1,080-second visibility is deployed |
 | H2 | High | Historical: batch size 10 with sequential OCR | Batch timeout and broad failure blast radius | Batch size 1 is deployed |
 | H3 | High | Historical: FIFO loop continued after failure | Ordering violation after partial-response activation | Size 1 is deployed; defensive loop stops at first failure |
@@ -741,13 +743,13 @@ Target: never record either complete URL, query component, request headers, or c
 
 Status: deployed application and benchmark logs contain neither URL nor query-string indicators. Existing historical logs retain their own configured CloudWatch retention and should be handled according to the incident/data-retention policy.
 
-#### C4. Sender signing is implemented; receiver verification remains open
+#### C4. Sender and CFF receiver authentication are deployed
 
 The callback function is configured with `url: true`. SST defaults Function URL authorization to `none`, and the deployed URL confirms `AuthType: NONE` with permissive CORS. The callback accepts a document ID from its path and a caller-supplied success payload, casts it to `OnnxTRRawInference`, and persists it.
 
-Sender status: the document processor on `main` signs successful and sanitized failure callbacks according to the authoritative [HMAC callback specification](hmac-callback-spec.md). The repository merge does not establish production deployment or secret-provisioning status.
+Sender status: the document processor signs successful and sanitized failure callbacks according to the authoritative [HMAC callback specification](hmac-callback-spec.md). Sender signing and callback-delivery retry behavior are deployed in production.
 
-Receiver status: `packages/functions/src/process-document.ts` does not verify the signature, enforce freshness, or claim event IDs before parsing and writing. It must reject missing, stale, invalid, or replayed authentication before parsing or writing data and must implement business idempotency separately.
+Receiver status: the production CFF receiver is external to this repository. It verifies the captured bytes with the hex-decoded document key, enforces freshness and canonical UUIDv7, atomically claims event IDs, and applies document semantic idempotency. A production document callback verified this path at `2026-07-18T19:29:35Z`. The unsigned `packages/functions/src/process-document.ts` function remains in this repository but is not the evidenced production CFF receiver. See the [CFF receiver companion specification](https://github.com/yazalulloa/cactus-fast-food/blob/main/specs/hmac-callback-receiver.md).
 
 ### 7.3 High findings
 
@@ -1013,7 +1015,7 @@ The authoritative wire format, `x-cff-*` headers, exact-byte signing constructio
 
 The sender serializes compact UTF-8 JSON exactly once and signs the exact bytes it passes through `requests.post(data=rawBody)`. It loads the 64-character hexadecimal `DocumentCallbackHmacSecret` through SST as the runtime value `CFF_HMAC_SECRET_HEX`, which it decodes into a 32-byte key. Missing or malformed configuration prevents callback preparation; there is no unsigned fallback.
 
-The receiver must authenticate the captured raw body before JSON parsing, enforce the five-minute freshness window, atomically retain delivery-attempt event IDs for ten minutes, and perform domain-level document idempotency separately. Sender signing is implemented on `main`; receiver verification is not.
+The receiver must authenticate the captured raw body before JSON parsing, enforce the five-minute freshness window, atomically retain delivery-attempt event IDs for ten minutes, and perform domain-level document idempotency separately. The external CFF receiver implements and deploys these controls; its route, storage, diagnostics, and rotation behavior are defined in the [CFF receiver companion specification](https://github.com/yazalulloa/cactus-fast-food/blob/main/specs/hmac-callback-receiver.md).
 
 #### HTTP behavior
 
@@ -1115,7 +1117,11 @@ Required application event names:
 - `document_downloaded`
 - `document_processed`
 - `callback_completed`
+- `callback_delivery_failed`
 - `document_failed`
+- `failure_callback_failed`
+
+`document_failed` identifies OCR or document-processing failure. `failure_callback_failed` identifies failure to deliver a sanitized terminal processing result. `callback_delivery_failed` identifies failure to deliver an otherwise completed OCR result. A delivery-only failure is retryable and does not trigger a misleading document-processing failure callback.
 
 Common safe fields:
 
@@ -1343,14 +1349,13 @@ Remaining rollout sequence:
 
 1. Complete URL allowlists, DNS/IP checks, callback-path validation, and decoded image/pixel verification; redirect rejection and bounded streaming are already deployed.
 2. Extend the deployed failure metrics and alarms with stage-level download, decode, model-init, OCR, callback, total-duration, byte, page, and cold-start metrics without logging URLs, object identifiers, OCR content, or callback payloads.
-3. Deploy receiver verification in report-only mode and validate captured raw-body computations in a non-production stage. Report-only traffic must not be treated as authenticated for security-sensitive side effects.
-4. Provision stage-specific callback secrets and deploy the already-merged sender signing implementation; a repository merge alone is not deployment evidence.
-5. Make receiver verification, freshness checks, and replay claims mandatory, then enable domain-idempotent persistence.
-6. Run forced success, terminal failure, retry, and DLQ tests in an isolated stage. Never submit benchmark or forced-failure traffic to the production FIFO queue.
-7. Add representative ground-truth accuracy, security, container/RIE, and vulnerability-scanning gates.
-8. Deploy each remaining production change during a low-traffic window and monitor errors, callback failures, duration, memory, queue age, retries, and DLQ for at least 24 hours.
-9. Re-baseline operational thresholds after two weeks of clean batch-size-one data.
-10. Remove the stale `{s3Key}` client in a separately scoped cleanup after confirming no external invoker depends on it. Keep benchmark resources temporary and direct-invocation only.
+3. Run a controlled production statement callback and record its `2xx`, expected receiver result, source-queue depth, and DLQ depth without logging transaction data.
+4. Run forced success, terminal failure, retry, and DLQ tests in an isolated stage. Never submit benchmark or forced-failure traffic to the production FIFO queue.
+5. Add representative ground-truth accuracy, security, container/RIE, and vulnerability-scanning gates.
+6. Deploy each remaining production change during a low-traffic window and monitor errors, callback failures, duration, memory, queue age, retries, and DLQ for at least 24 hours.
+7. Investigate the stale `queue-age` alarm state observed after the incident even though the source queue was empty and missing data was configured as non-breaching.
+8. Re-baseline operational thresholds after two weeks of clean batch-size-one data.
+9. Remove the stale `{s3Key}` client in a separately scoped cleanup after confirming no external invoker depends on it. Keep benchmark resources temporary and direct-invocation only.
 
 ### 11.1 Rollback
 

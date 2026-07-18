@@ -5,15 +5,15 @@
 | Metadata | Value |
 | --- | --- |
 | Protocol version | `v1` |
-| Repository status | Sender implementation merged to `main` |
-| Document receiver status | The in-repository receiver does not yet verify signatures |
-| Statement receiver status | External to this repository; verification is not evidenced here |
+| Repository status | Sender signing and delivery-reliability implementation merged to `main` and deployed |
+| Document receiver status | CFF receiver implemented and deployed; production callback verified |
+| Statement receiver status | CFF receiver implemented and deployed; production callback acceptance not yet evidenced |
 | Last reviewed | 2026-07-18 |
 | Scope | OnnxTR document processor and banking statement scraper callbacks |
 
-Repository status is not deployment evidence. This specification does not assert that secrets are configured, processors are deployed, or receivers enforce verification in any environment.
+Repository status alone is not deployment evidence. The production statements in this revision are supported by the deployment confirmation and sanitized recovery evidence recorded in section 18; they must not be generalized to another stage without equivalent verification.
 
-The implementation description is based on merged commit `3bdddf4` and the secret declarations and injection in `infra/callback-signing.ts`, `infra/queue.ts`, `infra/onnxtr.ts`, and `infra/ip-scraper.ts`; the sender and test behavior in `packages/onnxtr-lambda/handler.py`, `packages/onnxtr-lambda/tests/test_handler.py`, `packages/ip-scraper/src/callback-signing.mjs`, `packages/ip-scraper/src/callback-signing.test.mjs`, and `packages/ip-scraper/src/handler.mjs`; and the unsigned receiver in `packages/functions/src/process-document.ts`.
+The sender description is based on merged commit `9d4f1ef` and the secret declarations and injection in `infra/callback-signing.ts`, `infra/queue.ts`, `infra/onnxtr.ts`, and `infra/ip-scraper.ts`; the sender and test behavior in `packages/onnxtr-lambda/handler.py`, `packages/onnxtr-lambda/tests/test_handler.py`, and `packages/ip-scraper/src/`; and the delivery monitoring in `infra/onnxtr-monitoring.ts`. The production CFF receiver is implemented in `yazalulloa/cactus-fast-food` at `3233ba4` and is described in the [CFF HMAC Callback Receiver and Operations Specification](https://github.com/yazalulloa/cactus-fast-food/blob/main/specs/hmac-callback-receiver.md). The unsigned `packages/functions/src/process-document.ts` function in this repository is not the evidenced production CFF receiver.
 
 ## 2. Purpose and audience
 
@@ -153,8 +153,10 @@ The document processor:
 - Sends `requests.post(data=rawBody)`, not `json=payload`.
 - Disables redirects.
 - Treats callback HTTP errors as delivery failures.
+- Raises `CallbackDeliveryError` and emits `callback_delivery_failed`, rather than `document_failed`, when a completed OCR result cannot be delivered.
 - Returns the SQS message in `batchItemFailures`, enabling retry and eventual DLQ behavior.
 - Suppresses callbacks entirely for benchmark-mode records.
+- Publishes callback-delivery failures through the dedicated `CallbackDeliveryFailed` metric and alarm.
 
 If a successful callback fails, the handler marks the SQS record failed for retry but does not send a misleading document-processing failure callback. Actual document-processing failures still use the separately signed sanitized failure callback. Every HTTP attempt receives a new timestamp, UUIDv7 event ID, and signature.
 
@@ -165,9 +167,11 @@ The statement processor:
 - Signs successful statement callbacks only.
 - Sends the signed body as a Node.js `Buffer`.
 - Does not currently send a failure callback.
+- Uses `postSignedCallback` with a 30-second delivery timeout.
 - Attempts logout and browser cleanup before propagating callback failures.
 - Converts non-2xx `fetch` responses, network failures, timeouts, and signing failures into delivery errors.
 - Uses an SQS event-source batch size of one so every delivered record is processed by the single-record handler.
+- Logs delivery failure without including the callback URL.
 
 Consequently, statement callback failures fail the Lambda invocation and allow the FIFO SQS message to retry and eventually reach its DLQ.
 
@@ -196,6 +200,7 @@ At exactly 300 seconds of positive or negative skew, the timestamp is within the
 | Condition | Response |
 | --- | --- |
 | Unsupported media type | `415` |
+| Request body above the receiver's documented limit | `413` |
 | Missing, malformed, stale, replayed, or invalid authentication | Generic `401` without identifying the failed check |
 | Authenticated but invalid JSON or payload schema | `400` |
 | Authenticated and accepted | Any documented `2xx` |
@@ -203,11 +208,13 @@ At exactly 300 seconds of positive or negative skew, the timestamp is within the
 
 The receiver MUST NOT log the secret, full signature, raw body, callback URL query parameters, OCR text, or transaction data.
 
+The deployed CFF receiver implements this order with `crypto.subtle.verify()`. It validates and hex-decodes the 64-character current and optional previous secret before importing the 32-byte HMAC key. It atomically claims the processor/event-ID pair before JSON parsing and business processing. Both an exact signed replay and reuse of the same event ID with different bytes receive a generic `401`. See the [receiver companion specification](https://github.com/yazalulloa/cactus-fast-food/blob/main/specs/hmac-callback-receiver.md) for route limits, response details, diagnostics, and storage behavior.
+
 ## 12. Replay protection versus business idempotency
 
 `x-cff-event-id` identifies one HTTP delivery attempt. SQS retries prepare new callback attempts with new event IDs and timestamps. A replay cache prevents reuse of the same signed request, but it cannot detect semantically identical callbacks produced by separate SQS attempts.
 
-Document persistence and statement consumers therefore still require domain-level idempotency based on stable business identifiers. This follows from the [at-least-once delivery behavior of Lambda with Amazon SQS](https://docs.aws.amazon.com/lambda/latest/dg/with-sqs.html).
+Document persistence and statement consumers therefore still require domain-level idempotency based on stable business identifiers. CFF records the accepted document payload digest on the inference so a later delivery attempt with a new event ID cannot repeat terminal effects or move state backward. Its statement receiver uses stable transaction-reference handling to avoid duplicate persistence. This follows from the [at-least-once delivery behavior of Lambda with Amazon SQS](https://docs.aws.amazon.com/lambda/latest/dg/with-sqs.html).
 
 ## 13. Secret rotation
 
@@ -224,6 +231,8 @@ Protocol `v1` has no key identifier. Rotate one processor key at a time with cur
 9. Retain the old secret securely for the rollback window, then destroy it.
 
 The receiver MUST try both configured keys without revealing which one matched. Adding `x-cff-key-id`, changing the signing input, or changing algorithms requires a future protocol version; implementations MUST NOT silently change `v1`.
+
+The CFF current/previous pairs are `DOCUMENT_CALLBACK_SECRET` / `DOCUMENT_CALLBACK_SECRET_PREVIOUS` and `STATEMENTS_CALLBACK_SECRET` / `STATEMENTS_CALLBACK_SECRET_PREVIOUS`. Every configured value remains a 64-character hexadecimal string and is decoded before HMAC use.
 
 ## 14. Threat model and security limitations
 
@@ -287,7 +296,7 @@ Current sender tests cover:
 - Invalid or missing Node.js secret rejection.
 - Distinct Node.js event IDs across calls.
 
-Receiver implementations still require tests for:
+The CFF receiver's 17 focused callback tests cover:
 
 - A valid request.
 - A one-byte body mutation.
@@ -304,38 +313,58 @@ Receiver implementations still require tests for:
 - A valid signature with invalid JSON.
 - A non-ASCII UTF-8 body.
 - Bodies with whitespace or alternate valid JSON formatting.
+- Endpoint body and transaction-count limits.
+- Semantic duplicate delivery attempts with new event IDs.
 
 ## 17. Rollout and operational checklist
 
-Receiver rollout SHOULD proceed as follows:
+Sender signing, receiver enforcement, and the delivery-reliability remediation are deployed in production. After any future deployment or key rotation, operators MUST verify a normal callback, authentication-rejection diagnostics, callback delivery failures, source-queue age, and DLQ depth without logging sensitive material.
 
-1. Implement verification in report-only mode.
-2. Validate captured raw-body computations in a non-production stage.
-3. Set stage-specific secrets.
-4. Deploy senders.
-5. Compare verification metrics without logging sensitive material.
-6. Enable enforcement.
-7. Monitor authentication failures, callback failures, queue retries, and DLQ depth.
-8. Roll back enforcement before rolling back sender signing if failures spike.
+If positive callbacks fail, operators SHOULD stop the affected queue workflow while sender and receiver configuration are reconciled. Receiver enforcement may be changed only through coordinated change control; an unsigned public callback MUST NOT be restored as an ad hoc rollback. A sender rollback and receiver rollback must preserve a mutually compatible authenticated contract.
 
-Report-only mode MUST NOT treat an invalid signature as authenticated for security-sensitive side effects. It exists only as migration observation while legacy unsigned traffic is explicitly identified.
+The remaining production acceptance work is a controlled statement callback that receives `2xx`, reports the expected receiver result, and leaves its source queue and DLQ empty. Missing, altered, stale, and replayed production probes must not be marked complete until separately executed.
 
-## 18. Known gaps and status matrix
+## 18. 2026-07-18 production authentication incident
+
+### Impact
+
+Production document callbacks received generic `401` responses. Private CFF diagnostics classified the failures as `signature_mismatch`, and the document SQS record retried. The pre-remediation handler then misclassified the delivery failure as a document-processing failure and attempted a separately signed failure callback, which was rejected for the same reason. This emitted `FailureCallbackFailed` and `DocumentFailed` and contributed to the oldest-message age crossing 600 seconds.
+
+The investigation also found a statement-delivery reliability defect: signing, network, and non-2xx failures could be swallowed, allowing SQS to treat the invocation as successful. This was a defect discovered during the incident; there is no evidence here of a lost production statement callback.
+
+### Root cause and remediation
+
+Both senders hex-decoded the configured 64-character value into a 32-byte HMAC key. The original CFF receiver instead imported the same characters as UTF-8 bytes. Matching configured strings therefore produced different keys and signatures. The configured values were correct, so secret rotation was unnecessary.
+
+[CFF PR 21](https://github.com/yazalulloa/cactus-fast-food/pull/21), merged as `3233ba4`, corrected key decoding and added the interoperability vector, strict UUIDv7 and freshness validation, current/previous key support, atomic replay claims, cleanup, and semantic-idempotency hardening. [Sender PR 3](https://github.com/yaz-org/textract-testing/pull/3), merged as `9d4f1ef`, separated callback delivery from processing failures, added delivery monitoring, made statement failures retryable, set statement batch size one, and removed callback URLs from delivery logs.
+
+### Recovery evidence and remaining work
+
+Both remediations were deployed. At `2026-07-18T19:29:35Z`, a production document callback passed HMAC verification, atomically claimed its replay event, completed the document mutation, and returned `200`. A subsequent read-only check found the document and statement source queues and DLQs empty, so no redrive was required.
+
+The `queue-age` alarm still displayed its earlier 619/675-second breach even though the queue was empty and `TreatMissingData` was `notBreaching`. That stale state is an operational follow-up, not evidence of a continuing backlog. End-to-end production statement acceptance remains pending a controlled smoke test.
+
+## 19. Known gaps and status matrix
 
 | Capability | Status |
 | --- | --- |
-| Document sender signing | Implemented on `main` |
-| Statement sender signing | Implemented on `main` |
-| Separate processor secrets | Implemented in infrastructure |
+| Document sender signing | Implemented and deployed |
+| Statement sender signing | Implemented and deployed |
+| Document sender retry behavior | Implemented and deployed |
+| Statement sender retry behavior | Implemented and deployed |
+| Separate processor secrets | Implemented and provisioned for the evidenced deployment |
 | Exact-body unit tests | Implemented |
-| Document receiver verification | Not implemented |
-| Statement receiver verification | External/not evidenced |
-| Replay store | Not implemented in this repository |
-| Business idempotency | Not provided by HMAC |
-| Automated secret rotation | Not implemented |
-| Production deployment verification | Not established by repository merge |
+| CFF document receiver verification | Implemented, deployed, and production callback verified |
+| CFF statement receiver verification | Implemented and deployed; production callback acceptance not yet evidenced |
+| Replay store and cleanup | Implemented in CFF |
+| Document semantic idempotency | Implemented in CFF |
+| Statement domain idempotency | Stable transaction-reference handling implemented; production smoke pending |
+| Current/previous key rotation | Implemented in CFF |
+| Automated end-to-end rotation | Not implemented |
+| Production document recovery | Verified |
+| Production statement recovery | Pending controlled smoke test |
 
-## 19. References
+## 20. References
 
 - [RFC 2104 — HMAC](https://www.rfc-editor.org/rfc/rfc2104.html)
 - [RFC 9562 — UUIDs and UUIDv7](https://www.rfc-editor.org/rfc/rfc9562.html)
