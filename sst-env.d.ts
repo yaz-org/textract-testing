@@ -6,6 +6,105 @@
 
 declare module "sst" {
   export interface Resource {
+    "DoctrFunction": {
+      "name": string
+      "type": "sst.aws.Function"
+    }
+    "DocumentCallbackHmacSecret": {
+      "type": "sst.sst.Secret"
+      "value": string
+    }
+    "DocumentDLQ": {
+      "type": "sst.aws.Queue"
+      "url": string
+    }
+    "DocumentQueue": {
+      "type": "sst.aws.Queue"
+      "url": string
+    }
+    "DocumentQueueApiKey": {
+      "type": "sst.sst.Secret"
+      "value": string
+    }
+    "Documents": {
+      "name": string
+      "type": "sst.aws.Bucket"
+    }
+    "DocumentsTable": {
+      "name": string
+      "type": "sst.aws.Dynamo"
+    }
+    "HashLockTable": {
+      "name": string
+      "type": "sst.aws.Dynamo"
+    }
+    "OnnxTRAlertTopic": {
+      "arn": string
+      "type": "sst.aws.SnsTopic"
+    }
+    "OnnxTRFunction": {
+      "name": string
+      "type": "sst.aws.Function"
+    }
+    "ProcessDocumentFn": {
+      "name": string
+      "type": "sst.aws.Function"
+      "url": string
+    }
+    "ProtonVpnConfig": {
+      "type": "sst.sst.Secret"
+      "value": string
+    }
+    "ProtonVpnPassword": {
+      "type": "sst.sst.Secret"
+      "value": string
+    }
+    "ProtonVpnUsername": {
+      "type": "sst.sst.Secret"
+      "value": string
+    }
+    "StatementCallbackHmacSecret": {
+      "type": "sst.sst.Secret"
+      "value": string
+    }
+    "StatementsScraperApiKey": {
+      "type": "sst.sst.Secret"
+      "value": string
+    }
+    "StatementsScraperDLQ": {
+      "type": "sst.aws.Queue"
+      "url": string
+    }
+    "StatementsScraperQueue": {
+      "type": "sst.aws.Queue"
+      "url": string
+    }
+    "SubmitDocumentFn": {
+      "name": string
+      "type": "sst.aws.Function"
+      "url": string
+    }
+    "SubmitScraperFn": {
+      "name": string
+      "type": "sst.aws.Function"
+      "url": string
+    }
+    "TelegramBotToken": {
+      "type": "sst.sst.Secret"
+      "value": string
+    }
+    "TelegramChatId": {
+      "type": "sst.sst.Secret"
+      "value": string
+    }
+    "Web": {
+      "type": "sst.aws.TanstackStart"
+      "url": string
+    }
+    "WebPageCredentials": {
+      "type": "sst.sst.Secret"
+      "value": string
+    }
   }
 }
 
